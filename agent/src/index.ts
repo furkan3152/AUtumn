@@ -12,7 +12,8 @@ export {
 } from "./runner.js";
 export { createPlan, confirmGrant, grantOf, expectedSessionOf, type CreatePlanInput } from "./plans.js";
 export { createChainReader, createAltanaExecutor } from "./adapters.js";
-export { createProductionRunner, createProductionService, serverConfigFromEnv, tickOnce } from "./production.js";
+export { createProductionRunner, createProductionService, createExecutor, serverConfigFromEnv, submitterFromEnv, tickOnce, type Submitter } from "./production.js";
+export { createDirectExecutor, type DirectExecutor, type DirectExecutorOptions, type DirectOutcome, type PreparedSubmission } from "./direct.js";
 export * from "./service.js";
 export { tryBuy, type TryBuyResult } from "./probe.js";
 export { encryptSessionKey, decryptSessionKey, generateSessionKey, parseEncryptionKey } from "./crypto.js";

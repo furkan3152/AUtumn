@@ -1,8 +1,10 @@
 import pg from "pg";
 import { configFromEnv, type AutumnConfig } from "@autumn/core";
+import type { Hex } from "viem";
 import { createAltanaExecutor, createChainReader } from "./adapters.js";
 import { parseEncryptionKey } from "./crypto.js";
-import type { ChainReader } from "./ports.js";
+import { createDirectExecutor } from "./direct.js";
+import type { ChainReader, SessionExecutor } from "./ports.js";
 import { createRunner, type Runner } from "./runner.js";
 import type { ServiceDeps } from "./service.js";
 import { PgStorage } from "./storage/pg.js";
@@ -16,6 +18,11 @@ type Env = Record<string, string | undefined>;
  * - AUTUMN_GOLD_BUYER_ADDRESS, AUTUMN_GOLD_BUYER_DEPLOY_BLOCK, AUTUMN_CELO_RPC_URL (optional)
  * - AUTUMN_EXECUTION=live to send purchases; anything else is a dry run
  * - AUTUMN_LOGS_BLOCK_RANGE (optional, default 5000: forno's eth_getLogs limit)
+ * - AUTUMN_SUBMITTER: "relay" (default) sends through the Altana relay;
+ *   "direct" submits the signed intent from the agent's own EOA with the
+ *   ERC-8021 tag at the end of the calldata (docs/direct-submit.md). Direct
+ *   needs AUTUMN_DIRECT_SUBMITTER_KEY (the EOA's private key, which pays gas
+ *   in CELO) and optionally AUTUMN_DIRECT_INTENT_TTL_SECS (default 600).
  */
 export function serverConfigFromEnv(env: Env = process.env): {
   databaseUrl: string;
@@ -23,19 +30,48 @@ export function serverConfigFromEnv(env: Env = process.env): {
   encryptionKey: Buffer;
   live: boolean;
   logBlockRange?: bigint;
+  submitter: Submitter;
 } {
   if (!env.DATABASE_URL) throw new Error("DATABASE_URL is not set");
   const cfg = configFromEnv(env);
   const encryptionKey = parseEncryptionKey(env.AUTUMN_KEY_ENCRYPTION_KEY);
   const range = env.AUTUMN_LOGS_BLOCK_RANGE;
   if (range !== undefined && !/^\d+$/.test(range)) throw new Error("AUTUMN_LOGS_BLOCK_RANGE must be a block count");
+  const submitter = submitterFromEnv(env);
   return {
     databaseUrl: env.DATABASE_URL,
     cfg,
     encryptionKey,
     live: env.AUTUMN_EXECUTION === "live",
     ...(range ? { logBlockRange: BigInt(range) } : {}),
+    submitter,
   };
+}
+
+/** Who sends purchases: the Altana relay (default) or the agent's own EOA. */
+export type Submitter = { kind: "relay" } | { kind: "direct"; key: Hex; intentTtlSecs?: number };
+
+export function submitterFromEnv(env: Env): Submitter {
+  const raw = env.AUTUMN_SUBMITTER;
+  if (raw === undefined || raw === "" || raw === "relay") return { kind: "relay" };
+  if (raw !== "direct") throw new Error('AUTUMN_SUBMITTER must be "relay" or "direct"');
+  const key = env.AUTUMN_DIRECT_SUBMITTER_KEY;
+  if (!key || !/^0x[0-9a-fA-F]{64}$/.test(key)) throw new Error("AUTUMN_SUBMITTER=direct needs AUTUMN_DIRECT_SUBMITTER_KEY (0x + 64 hex)");
+  const ttl = env.AUTUMN_DIRECT_INTENT_TTL_SECS;
+  if (ttl !== undefined && !/^\d+$/.test(ttl)) throw new Error("AUTUMN_DIRECT_INTENT_TTL_SECS must be a number of seconds");
+  return { kind: "direct", key: key as Hex, ...(ttl ? { intentTtlSecs: Number(ttl) } : {}) };
+}
+
+/** The executor for the configured submitter. */
+export function createExecutor(c: ReturnType<typeof serverConfigFromEnv>, log?: (msg: string, data?: Record<string, unknown>) => void): SessionExecutor {
+  if (c.submitter.kind === "relay") return createAltanaExecutor(c.cfg.rpcUrl);
+  return createDirectExecutor({
+    rpcUrl: c.cfg.rpcUrl,
+    submitterKey: c.submitter.key,
+    goldBuyer: c.cfg.goldBuyer,
+    ...(c.submitter.intentTtlSecs !== undefined ? { intentTtlSecs: c.submitter.intentTtlSecs } : {}),
+    ...(log ? { log } : {}),
+  });
 }
 
 function chainFor(c: ReturnType<typeof serverConfigFromEnv>): ChainReader {
@@ -52,13 +88,14 @@ function chainFor(c: ReturnType<typeof serverConfigFromEnv>): ChainReader {
 export function createProductionRunner(env: Env = process.env, pool?: pg.Pool): { runner: Runner; pool: pg.Pool; live: boolean } {
   const c = serverConfigFromEnv(env);
   const p = pool ?? new pg.Pool({ connectionString: c.databaseUrl, max: 3 });
+  const log = (msg: string, data?: Record<string, unknown>) => console.log(JSON.stringify({ msg, ...data }));
   const runner = createRunner({
     storage: new PgStorage(p),
     chain: chainFor(c),
-    executor: c.live ? createAltanaExecutor(c.cfg.rpcUrl) : null,
+    executor: c.live ? createExecutor(c, log) : null,
     encryptionKey: c.encryptionKey,
     goldBuyer: c.cfg.goldBuyer,
-    log: (msg, data) => console.log(JSON.stringify({ msg, ...data })),
+    log,
   });
   return { runner, pool: p, live: c.live };
 }

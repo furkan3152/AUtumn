@@ -71,8 +71,34 @@ function make(kind: FailureKind, bought: "no" | "unknown", code?: string): Expla
   return { kind, message: MESSAGES[kind], ...(code ? { code } : {}), bought, stopsPlan: kind === "session_ended" };
 }
 
+/**
+ * Thrown by the direct submitter (docs/direct-submit.md), which knows exactly
+ * what reached the chain. Carries its own kind and `bought`, so the runner's
+ * mapping never has to guess from text. The relay path never throws it.
+ */
+export class DirectSubmitError extends Error {
+  override readonly name = "DirectSubmitError";
+  constructor(
+    message: string,
+    readonly kind: FailureKind,
+    readonly bought: "no" | "unknown",
+    readonly detail?: Record<string, unknown>,
+  ) {
+    super(message);
+  }
+}
+
+function directErrorOf(err: unknown): DirectSubmitError | undefined {
+  const x = err as { name?: unknown; kind?: unknown; bought?: unknown } | null;
+  return x && x.name === "DirectSubmitError" && typeof x.kind === "string" && (x.bought === "no" || x.bought === "unknown")
+    ? (x as DirectSubmitError)
+    : undefined;
+}
+
 /** Maps a thrown SDK error (from execute/quoteExecute) to an ExplainedFailure. */
 export function explainAltanaError(err: unknown): ExplainedFailure {
+  const direct = directErrorOf(err);
+  if (direct) return { ...make(direct.kind, direct.bought, "direct_submit"), message: direct.message };
   const code = altanaCodeOf(err);
   const text = textOf(err);
 

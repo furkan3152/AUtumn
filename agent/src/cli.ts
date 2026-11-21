@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import pg from "pg";
-import { createAltanaExecutor } from "./adapters.js";
-import { createProductionService, serverConfigFromEnv, tickOnce } from "./production.js";
+import { createExecutor, createProductionService, serverConfigFromEnv, tickOnce } from "./production.js";
 import { tryBuy } from "./probe.js";
 import { migrate } from "./storage/pg.js";
 
@@ -40,7 +39,7 @@ async function main() {
     if (!cfg.live) throw new Error("try-buy sends a transaction request: set AUTUMN_EXECUTION=live");
     const { deps, pool } = createProductionService();
     try {
-      const r = await tryBuy({ ...deps, executor: createAltanaExecutor(cfg.cfg.rpcUrl) }, planId, BigInt(units));
+      const r = await tryBuy({ ...deps, executor: createExecutor(cfg) }, planId, BigInt(units));
       console.log(json(r));
     } finally {
       await pool.end();
