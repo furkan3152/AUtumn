@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "autumn",
+  // worker.ts wraps the handler OpenNext generates (.open-next/worker.js) and adds the cron handler.
+  "main": "worker.ts",
+  "compatibility_date": "2026-11-13",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  },
+  // The agent once an hour, at minute 7 (UTC). /api/cron/tick stays available for manual runs.
+  "triggers": {
+    "crons": ["7 * * * *"]
+  },
+  // No "limits.cpu_ms": the paid default (30 s CPU) is far above what a tick uses, since its 240 s budget is
+  // spent waiting on the network, which does not count as CPU time. The key applies to the paid plan only.
+  // Public values (NEXT_PUBLIC_*) are inlined by `next build`, so they must be set in the shell or in
+  // .env.production.local when `npm run cf:build` runs; setting them here has no effect on the browser.
+  // Non-secret server settings. Secrets go in with `wrangler secret put` (README, "Deploying on Cloudflare").
+  "vars": {
+    "AUTUMN_EXECUTION": "dry-run"
+  }
+}

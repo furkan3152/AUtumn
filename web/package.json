@@ -3,19 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build:deps": "npm --prefix ../core ci && npm --prefix ../core run build && npm --prefix ../agent ci && npm --prefix ../agent run build",
+    "build:deps": "npm --prefix ../core ci --include=dev --include=peer && npm --prefix ../core run build && npm --prefix ../agent ci --include=dev --include=peer && npm --prefix ../agent run build",
     "migrate": "node --env-file=.env.local ../agent/dist/cli.js migrate",
     "dev": "next dev",
     "build": "next build",
-    "vercel-build": "npm run build:deps && next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "cf:build": "npm run build:deps && opennextjs-cloudflare build",
+    "cf:preview": "opennextjs-cloudflare preview",
+    "cf:deploy": "opennextjs-cloudflare deploy"
   },
   "dependencies": {
     "@altananetwork/sdk": "^1.1.0",
     "@autumn/agent": "file:../agent",
     "@autumn/core": "file:../core",
+    "@opennextjs/cloudflare": "^1.20.18",
     "next": "^16.4.6",
     "pg": "^8.23.1",
     "react": "^19.3.1",
@@ -30,6 +33,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.7"
+    "vitest": "^3.2.7",
+    "wrangler": "^4.166.0"
   }
 }

@@ -37,6 +37,8 @@
   ],
   "exclude": [
     "node_modules",
-    "screenshots"
+    "screenshots",
+    ".open-next",
+    ".wrangler"
   ]
 }

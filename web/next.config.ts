@@ -9,10 +9,17 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   // Do not write AGENTS.md into the project on `next dev`.
   agentRules: false,
-  turbopack: { root: repoRoot },
-  outputFileTracingRoot: repoRoot,
-  // The runner and Postgres run as plain Node modules in route handlers, never in the browser bundle.
-  serverExternalPackages: ["@autumn/agent", "pg"],
 };
+
+if (process.env.AUTUMN_NEXT_TARGET !== "cloudflare") {
+  // `next dev` / `next build` (Turbopack): the repository root as root, so ../core and ../agent resolve.
+  nextConfig.turbopack = { root: repoRoot };
+  nextConfig.outputFileTracingRoot = repoRoot;
+  // The runner and Postgres run as plain Node modules in route handlers, never in the browser bundle.
+  nextConfig.serverExternalPackages = ["@autumn/agent", "pg"];
+}
+// The Workers build (open-next.config.ts) runs `next build --webpack` with web/ as the root, which OpenNext
+// expects: webpack bundles @autumn/agent and @autumn/core into the server code, and OpenNext bundles the rest
+// (pg included) into the Worker. Workers have no external packages; everything is bundled.
 
 export default nextConfig;

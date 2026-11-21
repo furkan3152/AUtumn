@@ -28,7 +28,7 @@ Until this run is done, none of these has happened on any chain:
 9. `revokeSession` with a bare public key, and `isValidKey` turning false.
 10. The "OLD" price-check refusal as the relay reports it (we match the word
     `OLD` in the error text; the real text is unknown).
-11. Vercel cron, Neon and the route handlers in a deployment.
+11. The Cloudflare Cron Trigger, Neon and the route handlers in a deployment.
 12. The relay's fee quote (`quoteExecute`) for a session purchase, which the
     agent compares with the plan's 0.05 USD₮ per-buy allowance before sending.
 13. "Send out": an admin (passkey) transfer of USD₮, XAUt0 and CELO, and the

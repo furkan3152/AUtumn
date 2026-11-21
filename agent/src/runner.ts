@@ -49,7 +49,7 @@ export type RunnerOptions = {
   /**
    * Wall-clock budget for one tick, ms. The tick returns before it is spent
    * and leaves the plans it did not reach for the next tick. Default 240 000,
-   * inside Vercel's 300 s function limit.
+   * well inside a Cloudflare Cron Trigger's 15 min wall-clock limit.
    */
   timeBudgetMs?: number;
   /** A plan is not started with less than this left in the budget, ms. Default 45 000. */

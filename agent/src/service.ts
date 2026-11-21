@@ -354,8 +354,8 @@ export async function walletViewRequest(deps: Pick<ServiceDeps, "storage" | "gol
 }
 
 /**
- * The cron secret check. Vercel Cron sends `Authorization: Bearer <CRON_SECRET>`;
- * a manual trigger sends the same header. Constant time; a missing or short
+ * The cron secret check. The Worker's Cron Trigger (web/worker.ts) sends
+ * `Authorization: Bearer <CRON_SECRET>`; a manual trigger sends the same header. Constant time; a missing or short
  * secret refuses everything.
  */
 export function cronAuthorized(authorization: string | null | undefined, secret: string | undefined): boolean {

@@ -8,11 +8,17 @@ import type { PlanPeriod } from "@autumn/core";
 import type { Attempt, AttemptSlot, AttemptStatus, EncryptedKey, NewAttempt, PlanRecord, RunLogEntry, RunLogKind } from "../types.js";
 import type { NewPlan, Storage } from "./types.js";
 
-/** agent/migrations, found from this module's own location at run time (not a bundler-visible asset URL). */
-export const MIGRATIONS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "migrations");
+/**
+ * agent/migrations, found from this module's own location at run time (not a bundler-visible asset URL).
+ * Resolved only when called: in a bundled Worker `import.meta.url` is not a file URL, and migrations
+ * are applied out of band (`autumn-agent migrate`), never from the app.
+ */
+export function migrationsDir(): string {
+  return path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "migrations");
+}
 
 /** Applies migrations/*.sql in name order, once each, inside a transaction per file. */
-export async function migrate(pool: pg.Pool, dir = MIGRATIONS_DIR): Promise<string[]> {
+export async function migrate(pool: pg.Pool, dir = migrationsDir()): Promise<string[]> {
   const files = (await readdir(/*turbopackIgnore: true*/ dir)).filter((f) => f.endsWith(".sql")).sort();
   const client = await pool.connect();
   const applied: string[] = [];
