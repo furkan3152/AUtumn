@@ -1,0 +1,74 @@
+{
+  "block": "83383936",
+  "pool": {
+    "token0": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+    "token1": "0xaf37E8B6C9ED7f6318979f56Fc287d76c30847ff",
+    "fee": 3000,
+    "liquidity": "26874820673",
+    "factory": "0xAfE208a311B21f13EF87E33A90049fC17A7acDEc",
+    "sqrtPriceX96": "1331134477946704550435401268",
+    "tick": -81731
+  },
+  "factoryPools": {
+    "100": "0x0000000000000000000000000000000000000000",
+    "500": "0x0000000000000000000000000000000000000000",
+    "3000": "0xbb469A28f64C72aECC7d05Ca6e45B2FB1a63B4F9",
+    "10000": "0x0000000000000000000000000000000000000000"
+  },
+  "poolBalances": {
+    "USDT": "24786.756312",
+    "XAUt0": "28.772221"
+  },
+  "router02": {
+    "codeLen": 48996,
+    "factory": "0xAfE208a311B21f13EF87E33A90049fC17A7acDEc",
+    "WETH9": "0x0000000000000000000000000000000000000000",
+    "factoryV2": "0x0000000000000000000000000000000000000000"
+  },
+  "quoter2": {
+    "codeLen": 16548,
+    "factory": "0xAfE208a311B21f13EF87E33A90049fC17A7acDEc"
+  },
+  "universalRouterCodeLen": 35918,
+  "midPriceUSDTperXAUt0": 3542.544405884868,
+  "quotes": {
+    "$5": {
+      "amountInUSDT": 5,
+      "amountOutXAUt0": 0.001407,
+      "rawOut": "1407",
+      "execPriceUSDTperXAUt0": 3553.6602700781805,
+      "totalCostVsMidPct": 0.3137819295884192,
+      "priceImpactExFeePct": 0.012840583799667016,
+      "ticksCrossed": 0,
+      "gasEstimate": "96069"
+    },
+    "$50": {
+      "amountInUSDT": 50,
+      "amountOutXAUt0": 0.014071,
+      "rawOut": "14071",
+      "execPriceUSDTperXAUt0": 3553.4077180015634,
+      "totalCostVsMidPct": 0.30665281424981927,
+      "priceImpactExFeePct": 0.00573285580707239,
+      "ticksCrossed": 0,
+      "gasEstimate": "96043"
+    },
+    "$500": {
+      "amountInUSDT": 500,
+      "amountOutXAUt0": 0.140674,
+      "rawOut": "140674",
+      "execPriceUSDTperXAUt0": 3554.3170735174945,
+      "totalCostVsMidPct": 0.33232237295515166,
+      "priceImpactExFeePct": 0.03132540583627996,
+      "ticksCrossed": 0,
+      "gasEstimate": "102740"
+    }
+  },
+  "selectors": {
+    "SwapRouter02.exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))": "0x04e45aaf",
+    "SwapRouter02.exactInput((bytes,address,uint256,uint256))": "0xb858183f",
+    "SwapRouter02.multicall(uint256,bytes[])": "0x5ae401dc",
+    "SwapRouter02.multicall(bytes[])": "0xac9650d8",
+    "SwapRouter02.sweepToken(address,uint256,address)": "0xdf2ab5bb",
+    "ERC20.approve(address,uint256)": "0x095ea7b3"
+  }
+}

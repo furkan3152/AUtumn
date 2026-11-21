@@ -30,7 +30,7 @@ track. Work started on 21 November 2026 and is in progress.
 | `web/` | The app (Next.js) |
 | `contracts/` | `GoldBuyer` and its mainnet-fork tests |
 | `agent/` | The service that runs scheduled purchases |
-| `docs/` | Notes from testing the Altana flow on Celo |
+| `docs/altana-spike/` | Findings and scripts from testing the Altana flow on Celo |
 
 ## Licence
 
