@@ -7,11 +7,12 @@ import {
   PLAN_DURATION_WEEKS,
   PLAN_PRESETS_USDT,
   draftLimits,
-  type GramClient,
-  type GramState,
-} from "@/lib/gram";
+  type PlanPeriod,
+  type AutumnClient,
+  type AutumnState,
+} from "@/lib/autumn";
 import { celo, formatDate, usdt } from "@/lib/format";
-import { errorText } from "@/lib/useGram";
+import { errorText } from "@/lib/useAutumn";
 import { Button, Panel, Spinner } from "../ui";
 
 const UNIT = 10n ** BigInt(DECIMALS.USDT);
@@ -22,28 +23,32 @@ export function PlanPicker({
   onDone,
   onBack,
 }: {
-  client: GramClient;
-  state: GramState;
+  client: AutumnClient;
+  state: AutumnState;
   onDone: () => void;
   onBack?: () => void;
 }) {
   const [amount, setAmount] = useState<number>(5);
+  const [period, setPeriod] = useState<PlanPeriod>("week");
   const [dip, setDip] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const name = useId();
+  const freqName = useId();
 
-  const weekly = BigInt(amount) * UNIT;
-  const limits = useMemo(() => draftLimits({ weeklyAmount: weekly, buyTheDip: dip }, new Date()), [weekly, dip]);
+  const each = BigInt(amount) * UNIT;
+  const daily = period === "day";
+  const per = daily ? "day" : "week";
+  const limits = useMemo(() => draftLimits({ amount: each, period, buyTheDip: dip }, new Date()), [each, period, dip]);
   const balance = state.balances?.usdt ?? 0n;
-  const weeksCovered = weekly > 0n ? Number(balance / weekly) : 0;
-  const feeDue = state.registration && !state.registration.paid ? state.registration.feeCelo : null;
+  const buysCovered = each > 0n ? Number(balance / each) : 0;
+  const feeDue = state.registration && state.registration.nextGrantFeeCelo > 0n ? state.registration : null;
 
   const confirm = async () => {
     setBusy(true);
     setError(null);
     try {
-      await client.confirmPlan({ weeklyAmount: weekly, buyTheDip: dip });
+      await client.confirmPlan({ amount: each, period, buyTheDip: dip, expiresAt: limits.expiresAt });
       onDone();
     } catch (e) {
       setError(errorText(e));
@@ -64,13 +69,26 @@ export function PlanPicker({
 
       <Panel>
         <fieldset className="presets">
-          <legend className="frame__title">Gold to buy every week</legend>
+          <legend className="frame__title">How often</legend>
+          <div className="presets__row presets__row--two">
+            {(["week", "day"] as const).map((p) => (
+              <label key={p} className={`preset ${period === p ? "is-on" : ""}`}>
+                <input type="radio" name={freqName} value={p} checked={period === p} onChange={() => setPeriod(p)} />
+                <span className="preset__amount">{p === "week" ? "Weekly" : "Daily"}</span>
+                <span className="preset__unit">{p === "week" ? "resets Monday 00:00 UTC" : "resets 00:00 UTC"}</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
+        <fieldset className="presets">
+          <legend className="frame__title">Gold to buy every {per}</legend>
           <div className="presets__row">
             {PLAN_PRESETS_USDT.map((p) => (
               <label key={p} className={`preset ${amount === p ? "is-on" : ""}`}>
                 <input type="radio" name={name} value={p} checked={amount === p} onChange={() => setAmount(p)} />
                 <span className="preset__amount">${p}</span>
-                <span className="preset__unit">per week</span>
+                <span className="preset__unit">per {per}</span>
               </label>
             ))}
           </div>
@@ -81,7 +99,9 @@ export function PlanPicker({
           <span className="toggle__box" aria-hidden="true" />
           <span>
             <span className="toggle__label">Buy once more if gold drops {DIP_PERCENT}%</span>
-            <span className="toggle__help">At most one extra buy per week, so the weekly limit doubles.</span>
+            <span className="toggle__help">
+              At most one extra buy per {per}, so the {daily ? "daily" : "weekly"} limit doubles.
+            </span>
           </span>
         </label>
       </Panel>
@@ -89,9 +109,20 @@ export function PlanPicker({
       <Panel title="Limits written onchain">
         <dl className="facts">
           <div>
-            <dt>Weekly limit</dt>
+            <dt>{daily ? "Daily" : "Weekly"} limit</dt>
             <dd>
-              <span className="num">{usdt(limits.weeklyCap)} USD₮</span> per week, resets Monday <span className="num">00:00</span> UTC
+              <span className="num">{usdt(limits.cap)} USD₮</span> per {per}, including{" "}
+              <span className="num">{usdt(limits.feeAllowance)}</span> USD₮ for network fees. Resets{" "}
+              {daily ? (
+                <>
+                  every day at <span className="num">00:00</span> UTC
+                </>
+              ) : (
+                <>
+                  Monday <span className="num">00:00</span> UTC
+                </>
+              )}
+              .
             </dd>
           </div>
           <div>
@@ -101,7 +132,8 @@ export function PlanPicker({
           <div>
             <dt>Ends</dt>
             <dd>
-              <span className="num">{formatDate(limits.expiresAt)}</span> (<span className="num">{PLAN_DURATION_WEEKS}</span> weeks)
+              <span className="num">{formatDate(limits.expiresAt)}</span>, after <span className="num">{PLAN_DURATION_WEEKS}</span> weeks.
+              The agent cannot spend after that.
             </dd>
           </div>
           <div>
@@ -111,16 +143,18 @@ export function PlanPicker({
         </dl>
         <p className="muted small">
           Your <span className="num">{usdt(balance)}</span> USD₮{" "}
-          {weeksCovered >= 1 ? (
+          {buysCovered >= 1 ? (
             <>
-              covers about <span className="num">{weeksCovered}</span> weekly buys.
+              covers about <span className="num">{buysCovered}</span> {daily ? "daily" : "weekly"} buys.
             </>
           ) : (
-            "is less than one weekly buy. Add money before the first purchase."
+            `is less than one ${daily ? "daily" : "weekly"} buy. Add money before the first purchase.`
           )}
           {feeDue !== null && (
             <>
-              {" "}Confirming also pays the one-time registration fee of <span className="num">{celo(feeDue)}</span> CELO.
+              {" "}
+              Confirming also pays Altana&apos;s registration fee of about <span className="num">{celo(feeDue.nextGrantFeeCelo)}</span> CELO
+              {feeDue.walletRegistered ? " for the agent's new key" : " for your wallet and the agent's key"}.
             </>
           )}
         </p>
@@ -133,7 +167,7 @@ export function PlanPicker({
           </>
         ) : (
           <>
-            Confirm: <span className="num">${amount}</span> of gold a week
+            Confirm: <span className="num">${amount}</span> of gold a {per}
           </>
         )}
       </Button>

@@ -1,5 +1,5 @@
-import { GramApp } from "@/components/GramApp";
+import { AutumnApp } from "@/components/AutumnApp";
 
 export default function Page() {
-  return <GramApp />;
+  return <AutumnApp />;
 }

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { encode } from "uqr";
-import { txUrl, type TxHash } from "@/lib/gram";
+import { txUrl, type TxHash } from "@/lib/autumn";
 
 export function Panel({
   title,

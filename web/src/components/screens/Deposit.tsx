@@ -1,6 +1,6 @@
 "use client";
 
-import { addressUrl, isFunded, type GramState } from "@/lib/gram";
+import { addressUrl, isFunded, type AutumnState } from "@/lib/autumn";
 import { celo, formatDateTime, usdt } from "@/lib/format";
 import { Button, CopyButton, Panel, Qr, Spinner } from "../ui";
 
@@ -9,14 +9,14 @@ export function Deposit({
   onContinue,
   onBack,
 }: {
-  state: GramState;
+  state: AutumnState;
   onContinue?: () => void;
   onBack?: () => void;
 }) {
   const wallet = state.wallet!;
   const b = state.balances;
   const reg = state.registration;
-  const needsFee = reg ? !reg.paid : true;
+  const needsFee = reg ? reg.nextGrantFeeCelo > 0n : false;
   const funded = isFunded(state);
   const groups = wallet.address.slice(2).match(/.{1,4}/g) ?? [];
 
@@ -59,9 +59,11 @@ export function Deposit({
           {needsFee && reg && (
             <li>
               <strong>
-                About <span className="num">{celo(reg.feeCelo)}</span> CELO, once.
-              </strong> It pays the one-time Altana registration fee for
-              your wallet.
+                About <span className="num">{celo(reg.nextGrantFeeCelo)}</span> CELO.
+              </strong>{" "}
+              It pays Altana&apos;s registration fee when you confirm a plan:{" "}
+              {reg.walletRegistered ? "once for the agent's new key." : "once for your wallet and once for the agent's key."} Any excess
+              is refunded.
             </li>
           )}
         </ul>
@@ -87,7 +89,7 @@ export function Deposit({
                   <dt>CELO</dt>
                   <dd className="num">
                     {celo(b.celo)}{" "}
-                    {b.celo >= reg.feeCelo ? (
+                    {b.celo >= reg.nextGrantFeeCelo ? (
                       <span className="tag tag--ok">Enough for the fee</span>
                     ) : (
                       <span className="tag">Waiting</span>

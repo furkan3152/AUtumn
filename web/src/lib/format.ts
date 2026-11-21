@@ -1,4 +1,4 @@
-import { DECIMALS, GRAMS_PER_TROY_OUNCE, type Address } from "./gram";
+import { DECIMALS, GRAMS_PER_TROY_OUNCE, type Address } from "./autumn";
 
 /** Exact decimal string of a base-unit amount, trimmed to `maxFraction` digits (rounded down). */
 export function formatUnits(value: bigint, decimals: number, maxFraction: number, minFraction = 0): string {

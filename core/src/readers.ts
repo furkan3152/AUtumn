@@ -8,11 +8,23 @@ import {
   type Hex,
   type PublicClient,
 } from "viem";
-import { altanaAccountAbi, altanaKeyStoreAbi, erc20Abi, goldBuyerAbi, SPEND_PERIOD } from "./abis.js";
-import { ALTANA_KEYSTORE, USDT, XAUT0 } from "./constants.js";
+import {
+  altanaAccountAbi,
+  altanaKeyStoreAbi,
+  altanaKeyStoreControllerAbi,
+  erc20Abi,
+  erc721BalanceAbi,
+  goldBuyerAbi,
+  keyRegisteredEvent,
+  SPEND_PERIOD,
+} from "./abis.js";
+import { USDT_XAUT0_POOL } from "./constants.js";
+import { uniswapV3PoolAbi } from "./abis.js";
+import { ALTANA_KEYSTORE, ALTANA_KEYSTORE_CONTROLLER, ERC8004_IDENTITY_REGISTRY, USDT, XAUT0 } from "./constants.js";
 import { sessionKeyIds } from "./keys.js";
-import { priceUsdtPerXaut } from "./quote.js";
-import { weekStart } from "./week.js";
+import { priceUsdtPerXaut, readTwapTick } from "./quote.js";
+import { WEEK_SECS, weekStart } from "./week.js";
+import { nextPeriodStart, periodStart, type PlanPeriod } from "./period.js";
 import { pinnedBlock } from "./client.js";
 
 /** forno.celo.org refuses eth_getLogs over more than 5000 blocks. */
@@ -60,8 +72,12 @@ export type SessionState = {
   accountExpiry?: number;
   spend: SpendLimit[];
   allowedCalls: AllowedCall[];
-  /** The weekly USD₮ cap, when the session has one. */
-  usdtWeekly?: { limit: bigint; spent: bigint; remaining: bigint; weekStart: number };
+  /**
+   * The session's USD₮ cap, when it has exactly one (a plan grants one, per
+   * day or per week). `periodStart`/`resetsAt` come from the account's own
+   * period arithmetic for the read block.
+   */
+  usdtCap?: { period: PlanPeriod; limit: bigint; spent: bigint; remaining: bigint; periodStart: number; resetsAt: number };
   blockNumber: bigint;
   blockTimestamp: number;
 };
@@ -134,15 +150,21 @@ export async function readSessionState(
   const expired = accountExpiry !== undefined && accountExpiry !== 0 && accountExpiry <= now;
   const status: SessionStatus = expired ? "expired" : onAccount && keyStoreValid ? "active" : "revoked";
 
-  const weekly = spend.find((s) => s.token === getAddress(USDT) && s.period === SPEND_PERIOD.week);
-  const usdtWeekly = weekly
-    ? {
-        limit: weekly.limit,
-        spent: weekly.spentThisPeriod,
-        remaining: weekly.limit > weekly.spentThisPeriod ? weekly.limit - weekly.spentThisPeriod : 0n,
-        weekStart: weekStart(now),
-      }
-    : undefined;
+  const usdtCaps = spend.filter((s) => s.token === getAddress(USDT));
+  const only = usdtCaps.length === 1 ? usdtCaps[0]! : undefined;
+  const capPeriod: PlanPeriod | undefined =
+    only?.period === SPEND_PERIOD.week ? "week" : only?.period === SPEND_PERIOD.day ? "day" : undefined;
+  const usdtCap =
+    only && capPeriod
+      ? {
+          period: capPeriod,
+          limit: only.limit,
+          spent: only.spentThisPeriod,
+          remaining: only.limit > only.spentThisPeriod ? only.limit - only.spentThisPeriod : 0n,
+          periodStart: periodStart(now, capPeriod),
+          resetsAt: nextPeriodStart(now, capPeriod),
+        }
+      : undefined;
 
   return {
     status,
@@ -153,7 +175,7 @@ export async function readSessionState(
     ...(accountExpiry !== undefined ? { accountExpiry } : {}),
     spend,
     allowedCalls,
-    ...(usdtWeekly ? { usdtWeekly } : {}),
+    ...(usdtCap ? { usdtCap } : {}),
     blockNumber: bn,
     blockTimestamp: now,
   };
@@ -265,7 +287,7 @@ export async function readPurchasesInWeek(
   const start = weekStart(q.at);
   const from = (await blockAtOrBefore(client, start, q.deployBlock)) ;
   const purchases = await readPurchases(client, { ...q, fromBlock: from < q.deployBlock ? q.deployBlock : from });
-  return purchases.filter((p) => p.timestamp >= start && p.timestamp < start + 604_800);
+  return purchases.filter((p) => p.timestamp >= start && p.timestamp < start + WEEK_SECS);
 }
 
 /** The Bought event(s) a given transaction emitted, from its receipt; null when the receipt does not exist yet. */
@@ -293,4 +315,121 @@ export async function readPurchasesInTx(client: PublicClient, goldBuyer: Address
     logIndex: l.logIndex,
     timestamp: Number(block.timestamp),
   }));
+}
+
+/** Fee a KeyStore registration carries above the quoted fee: 10% headroom, refunded (SDK REGISTRATION_FEE_MARGIN_PERCENT). */
+export const REGISTRATION_VALUE_PERCENT = 110n;
+
+export type Registration = {
+  /** The wallet's admin key (the passkey) is in the KeyStore: its first admin action has landed. */
+  walletRegistered: boolean;
+  /** KeyStoreController.getRegistrationFeeInWei() now (oracle driven, CELO wei per key). */
+  feePerKey: bigint;
+  /**
+   * CELO the next plan's grant sends with it: one registration for the
+   * session key, plus one for the wallet's admin key on its first grant, each
+   * with the SDK's 10% headroom (the excess is refunded).
+   */
+  nextGrantValue: bigint;
+  blockNumber: bigint;
+};
+
+/** The wallet's KeyStore registration state and what the next grant's registration costs, in CELO. */
+export async function readRegistration(client: PublicClient, wallet: Address, blockNumber?: bigint): Promise<Registration> {
+  const bn = blockNumber ?? (await pinnedBlock(client));
+  const [keys, feePerKey] = await Promise.all([
+    client.readContract({ address: ALTANA_KEYSTORE, abi: altanaKeyStoreAbi, functionName: "getKeys", args: [wallet], blockNumber: bn }),
+    client.readContract({ address: ALTANA_KEYSTORE_CONTROLLER, abi: altanaKeyStoreControllerAbi, functionName: "getRegistrationFeeInWei", blockNumber: bn }),
+  ]);
+  const walletRegistered = keys.length > 0;
+  const keysToRegister = walletRegistered ? 1n : 2n;
+  return {
+    walletRegistered,
+    feePerKey,
+    nextGrantValue: (feePerKey * REGISTRATION_VALUE_PERCENT * keysToRegister) / 100n,
+    blockNumber: bn,
+  };
+}
+
+/** How many ERC-8004 agent identities the wallet owns on Celo (the registry is an ERC-721). */
+export async function readAgentIdentityCount(client: PublicClient, wallet: Address): Promise<bigint> {
+  return client.readContract({ address: ERC8004_IDENTITY_REGISTRY, abi: erc721BalanceAbi, functionName: "balanceOf", args: [wallet] });
+}
+
+export type PoolState = {
+  /** Mid price from slot0, USD₮ base units per whole XAUt0 (no pool fee, no price impact). */
+  midUsdtPerXaut: bigint;
+  tick: number;
+  observationCardinality: number;
+  observationCardinalityNext: number;
+  /** False when the pool cannot report a 30-minute average now, so GoldBuyer.buy would revert "OLD". */
+  twapAvailable: boolean;
+  blockNumber: bigint;
+  blockTimestamp: number;
+};
+
+/** USD₮ per whole XAUt0 from a pool sqrtPriceX96 (token0 = USD₮, token1 = XAUt0, both 6 decimals). */
+export function midPriceFromSqrtPriceX96(sqrtPriceX96: bigint): bigint {
+  if (sqrtPriceX96 <= 0n) throw new Error("sqrtPriceX96 must be positive");
+  // price(token1 per token0) = sqrtP² / 2¹⁹²; USD₮ per XAUt0 = 2¹⁹² / sqrtP², scaled to 6 decimals.
+  return ((1n << 192n) * 1_000_000n) / (sqrtPriceX96 * sqrtPriceX96);
+}
+
+/** The USD₮/XAUt0 pool's mid price and whether its 30-minute TWAP (GoldBuyer's floor) can be read now. */
+export async function readPoolState(client: PublicClient, blockNumber?: bigint): Promise<PoolState> {
+  const bn = blockNumber ?? (await pinnedBlock(client));
+  const [slot0, twapTick, block] = await Promise.all([
+    client.readContract({ address: USDT_XAUT0_POOL, abi: uniswapV3PoolAbi, functionName: "slot0", blockNumber: bn }),
+    readTwapTick(client, bn),
+    client.getBlock({ blockNumber: bn }),
+  ]);
+  const [sqrtPriceX96, tick, , cardinality, cardinalityNext] = slot0;
+  return {
+    midUsdtPerXaut: midPriceFromSqrtPriceX96(sqrtPriceX96),
+    tick: Number(tick),
+    observationCardinality: Number(cardinality),
+    observationCardinalityNext: Number(cardinalityNext),
+    twapAvailable: twapTick !== null,
+    blockNumber: bn,
+    blockTimestamp: Number(block.timestamp),
+  };
+}
+
+export type TxFacts = {
+  txHash: Hex;
+  succeeded: boolean;
+  blockNumber: bigint;
+  timestamp: number;
+  /** KeyStore `KeyRegistered` events for the wallet in this transaction. */
+  keysRegistered: { keyId: Hex; isRoot: boolean }[];
+  /** True when any log in the transaction was emitted by the wallet's own account. */
+  touchedWallet: boolean;
+};
+
+/** What a (grant, revoke) transaction did for a wallet, from its receipt; null while there is no receipt. */
+export async function readTxFacts(client: PublicClient, txHash: Hex, wallet: Address): Promise<TxFacts | null> {
+  let receipt;
+  try {
+    receipt = await client.getTransactionReceipt({ hash: txHash });
+  } catch (err) {
+    if (err instanceof BaseError && err.name === "TransactionReceiptNotFoundError") return null;
+    throw err;
+  }
+  const block = await client.getBlock({ blockNumber: receipt.blockNumber });
+  const w = getAddress(wallet);
+  const registered = parseEventLogs({
+    abi: [keyRegisteredEvent],
+    logs: receipt.logs.filter((l) => getAddress(l.address) === getAddress(ALTANA_KEYSTORE)),
+    eventName: "KeyRegistered",
+  })
+    .filter((l) => getAddress(l.args.user) === w)
+    .map((l) => ({ keyId: l.args.keyId, isRoot: l.args.isRoot }));
+  return {
+    txHash,
+    succeeded: receipt.status === "success",
+    blockNumber: receipt.blockNumber,
+    timestamp: Number(block.timestamp),
+    keysRegistered: registered,
+    touchedWallet: receipt.logs.some((l) => getAddress(l.address) === w),
+  };
 }

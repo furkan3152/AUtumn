@@ -1,23 +1,23 @@
-import { getAddress, toFunctionSelector, type Address, type Hex } from "viem";
+import { getAddress, type Address, type Hex } from "viem";
 import {
-  APPROVE_SIGNATURE,
-  BUY_SIGNATURE,
   buildBuyCalls,
   decodeBuyCalls,
-  dueTimeInWeek,
+  dueTimeInPeriod,
   explainAltanaError,
   explainExecuteResult,
+  periodId as periodIdOf,
+  periodStart,
+  periodSecs,
   planToSessionGrant,
-  SPEND_PERIOD,
-  USDT,
+  sessionLimitsMismatch,
   weekId as weekIdOf,
   type ExplainedFailure,
   type Purchase,
-  type SessionState,
+  type SessionGrant,
 } from "@autumn/core";
 import type { ChainReader, SessionExecutor } from "./ports.js";
 import type { Storage } from "./storage/types.js";
-import type { Attempt, AttemptSlot, PlanRecord, RunLogEntry, RunOutcome } from "./types.js";
+import type { Attempt, AttemptSlot, PlanRecord, RunLogEntry, RunLogKind, RunOutcome } from "./types.js";
 import { decryptSessionKey } from "./crypto.js";
 
 export type RunnerOptions = {
@@ -36,9 +36,9 @@ export type RunnerOptions = {
   /** Chain re-reads after an ambiguous send, and the pause between them. Default 3 × 5 s. */
   recheckAttempts?: number;
   recheckDelayMs?: number;
-  /** Failed (not bought) attempts per plan, week and slot before the runner stops trying that week. Default 3. */
-  maxFailuresPerWeek?: number;
-  /** Dip rule threshold: buy again when the price is at least this many bps below the last purchase. Default 200. */
+  /** Failed (not bought) attempts per plan, period and slot before the runner stops trying that period. Default 3. */
+  maxFailuresPerPeriod?: number;
+  /** Dip rule threshold: buy again when the price is at least this many bps below the period's last purchase. Default 200. */
   dipBps?: number;
   sleep?: (ms: number) => Promise<void>;
   log?: (msg: string, data?: Record<string, unknown>) => void;
@@ -60,6 +60,7 @@ export type PlanReport = {
   planId: string;
   decision: PlanDecision;
   reason?: string;
+  kind?: RunLogKind;
   slot?: AttemptSlot;
   txHash?: Hex;
   amountIn?: bigint;
@@ -70,6 +71,34 @@ export type TickReport = { block: bigint; at: number; weekId: string; plans: Pla
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/** Plain words for the app and the run log when the pool cannot price a buy yet. */
+export const TWAP_UNAVAILABLE_REASON = "Price check not available right now, the agent will retry.";
+
+export function grantForPlan(plan: PlanRecord, goldBuyer: Address, nowSecs: number): SessionGrant {
+  return planToSessionGrant(
+    {
+      amountPerBuy: plan.amountPerBuy,
+      period: plan.period,
+      feeAllowancePerBuy: plan.feeAllowancePerBuy,
+      dipBuy: plan.dipBuy,
+      expiresAt: plan.expiresAt,
+    },
+    goldBuyer,
+    nowSecs,
+  );
+}
+
+/**
+ * USD₮ of cap headroom a purchase needs at send time on top of its amount: a
+ * fifth of the fee allowance (0.01 USD₮ by default, twice the ~0.005 relay fee
+ * Altana reports). The full allowance is what the grant reserves; requiring
+ * all of it at send time would let one reverted transaction's fee block the
+ * rest of the period.
+ */
+export function sendHeadroom(plan: Pick<PlanRecord, "feeAllowancePerBuy">): bigint {
+  return plan.feeAllowancePerBuy / 5n;
+}
+
 export function createRunner(opts: RunnerOptions) {
   const {
     storage,
@@ -79,66 +108,40 @@ export function createRunner(opts: RunnerOptions) {
     ambiguityHoldSecs = 1800,
     recheckAttempts = 3,
     recheckDelayMs = 5000,
-    maxFailuresPerWeek = 3,
+    maxFailuresPerPeriod = 3,
     dipBps = 200,
     sleep = defaultSleep,
     log = () => {},
   } = opts;
   const goldBuyer = getAddress(opts.goldBuyer);
 
-  /** Appends to the run log unless the previous entry for the plan says the same thing this week. */
+  /** Appends to the run log unless the previous entry for the plan says the same thing this period. */
   async function record(entry: RunLogEntry): Promise<void> {
     if (entry.outcome === "skipped") {
       const last = await storage.lastRunLog(entry.planId);
-      if (last && last.weekId === entry.weekId && last.outcome === entry.outcome && last.reason === entry.reason) return;
+      if (last && last.periodId === entry.periodId && last.outcome === entry.outcome && last.reason === entry.reason) return;
     }
     await storage.appendRunLog(entry);
   }
 
-  async function stop(plan: PlanRecord, week: string, at: number, reason: string): Promise<PlanReport> {
-    await storage.stopPlan(plan.id, reason);
-    await record({ planId: plan.id, weekId: week, at, outcome: "stopped", reason });
+  async function stop(plan: PlanRecord, period: string, at: number, kind: "revoked" | "expired"): Promise<PlanReport> {
+    const reason = kind === "expired" ? "the session has expired" : "the owner revoked the session";
+    await storage.stopPlan(plan.id, reason, at);
+    await record({ planId: plan.id, periodId: period, at, outcome: "stopped", reason, kind });
     log("plan stopped", { planId: plan.id, reason });
-    return { planId: plan.id, decision: "stopped", reason };
-  }
-
-  /** The plan's onchain session must carry exactly the plan's limits; anything else is refused. */
-  function limitsMismatch(plan: PlanRecord, state: SessionState): string | undefined {
-    let grant;
-    try {
-      grant = planToSessionGrant(
-        { amountPerWeek: plan.amountPerWeek, feeAllowancePerBuy: plan.feeAllowancePerBuy, dipBuy: plan.dipBuy, expiresAt: plan.expiresAt },
-        goldBuyer,
-        state.blockTimestamp,
-      );
-    } catch (err) {
-      return `the plan is not valid: ${(err as Error).message}`;
-    }
-    const want = new Set([
-      `${USDT.toLowerCase()}:${toFunctionSelector(APPROVE_SIGNATURE)}`,
-      `${goldBuyer.toLowerCase()}:${toFunctionSelector(BUY_SIGNATURE)}`,
-    ]);
-    const have = new Set(state.allowedCalls.map((c) => `${c.target.toLowerCase()}:${c.selector.toLowerCase()}`));
-    if (have.size !== want.size || [...want].some((w) => !have.has(w))) return "the session's onchain allowlist differs from the plan";
-    const usdtCaps = state.spend.filter((s) => s.token.toLowerCase() === USDT.toLowerCase());
-    const weekly = usdtCaps.find((s) => s.period === SPEND_PERIOD.week);
-    if (!weekly || weekly.limit !== grant.weeklyCap) return "the session's onchain weekly cap differs from the plan";
-    if (state.spend.some((s) => s.token.toLowerCase() !== USDT.toLowerCase())) return "the session can spend a token other than USD₮";
-    return undefined;
+    return { planId: plan.id, decision: "stopped", reason, kind };
   }
 
   /** Purchases by `wallet` at or after `since`, not already credited to another attempt. */
   function findPurchase(purchases: Purchase[], wallet: Address, since: number, credited: Set<string>): Purchase | undefined {
-    return purchases.find(
-      (p) => p.buyer === wallet && p.timestamp >= since && !credited.has(p.txHash.toLowerCase()),
-    );
+    return purchases.find((p) => p.buyer === wallet && p.timestamp >= since && !credited.has(p.txHash.toLowerCase()));
   }
 
   /**
    * Settles attempts left open by an ambiguous send or a crash, from the chain
    * only. Returns true when an attempt is still unresolved (the plan must wait).
    */
-  async function resolveOpenAttempts(plan: PlanRecord, purchases: Purchase[], now: number): Promise<boolean> {
+  async function resolveOpenAttempts(plan: PlanRecord, weekPurchases: Purchase[], now: number): Promise<boolean> {
     const open = await storage.openAttempts(plan.id);
     let waiting = false;
     for (const a of open) {
@@ -155,13 +158,16 @@ export function createRunner(opts: RunnerOptions) {
         }
       }
       // Attempts may have landed in a later week than they were claimed in; search that week too.
-      landed ??= findPurchase(purchases, plan.walletAddress, a.startedAt - 60, credited);
+      landed ??= findPurchase(weekPurchases, plan.walletAddress, a.startedAt - 60, credited);
       if (!landed && weekIdOf(a.startedAt) !== weekIdOf(now)) {
         landed = findPurchase(await chain.purchasesInWeek(a.startedAt), plan.walletAddress, a.startedAt - 60, credited);
       }
       if (landed) {
         await storage.updateAttempt(a.id, { status: "bought", txHash: landed.txHash, out: landed.out });
-        await record({ planId: plan.id, weekId: a.weekId, at: now, outcome: "bought", reason: "confirmed onchain after an earlier unclear result", txHash: landed.txHash, amountIn: landed.amountIn, out: landed.out });
+        await record({
+          planId: plan.id, periodId: a.periodId, at: now, outcome: "bought", reason: "confirmed onchain after an earlier unclear result",
+          txHash: landed.txHash, amountIn: landed.amountIn, out: landed.out, kind: a.slot === "dip" ? "dip" : "weekly",
+        });
         continue;
       }
       if (now - a.startedAt >= ambiguityHoldSecs) {
@@ -190,27 +196,31 @@ export function createRunner(opts: RunnerOptions) {
     return undefined;
   }
 
-  async function processPlan(plan: PlanRecord, ctx: { now: number; week: string; weekPurchases: Purchase[] }): Promise<PlanReport> {
-    const { now, week } = ctx;
+  async function processPlan(plan: PlanRecord, ctx: { now: number; weekPurchases: Purchase[] }): Promise<PlanReport> {
+    const { now } = ctx;
+    const period = periodIdOf(now, plan.period);
     const base = { planId: plan.id };
-    const skip = async (reason: string, slot?: AttemptSlot): Promise<PlanReport> => {
-      await record({ planId: plan.id, weekId: week, at: now, outcome: "skipped", reason });
-      return { ...base, decision: "skipped", reason, ...(slot ? { slot } : {}) };
+    const skip = async (reason: string, kind: RunLogKind, slot?: AttemptSlot): Promise<PlanReport> => {
+      await record({ planId: plan.id, periodId: period, at: now, outcome: "skipped", reason, kind });
+      return { ...base, decision: "skipped", reason, kind, ...(slot ? { slot } : {}) };
     };
 
     if (!plan.session) return { ...base, decision: "error", reason: "active plan without a granted session" };
-    if (plan.session.expiry <= now) return stop(plan, week, now, "the session has expired");
+    if (plan.session.expiry <= now) return stop(plan, period, now, "expired");
 
     // 1. Unresolved earlier attempts are settled from the chain first.
     if (await resolveOpenAttempts(plan, ctx.weekPurchases, now)) {
       return { ...base, decision: "waiting_on_earlier_attempt", reason: "an earlier purchase's outcome is not yet visible onchain" };
     }
 
-    // 2. What did the chain record this week?
-    const mine = ctx.weekPurchases.filter((p) => p.buyer === plan.walletAddress);
+    // 2. What did the chain record in this period? (A week's purchases hold every day's.)
+    const start = periodStart(now, plan.period);
+    const mine = ctx.weekPurchases.filter(
+      (p) => p.buyer === plan.walletAddress && p.timestamp >= start && p.timestamp < start + periodSecs(plan.period),
+    );
     let slot: AttemptSlot;
     if (mine.length === 0) {
-      if (now < dueTimeInWeek(now, plan.dayOfWeek, plan.hourUtc)) return { ...base, decision: "not_due" };
+      if (now < dueTimeInPeriod(now, plan.period, plan.dayOfWeek, plan.hourUtc)) return { ...base, decision: "not_due" };
       slot = "weekly";
     } else if (plan.dipBuy && mine.length === 1) {
       slot = "dip";
@@ -220,25 +230,35 @@ export function createRunner(opts: RunnerOptions) {
 
     // 3. Session validity and limits, onchain.
     const state = await chain.sessionState(plan.walletAddress, plan.sessionPublicKey);
-    if (state.status === "expired") return stop(plan, week, now, "the session has expired");
-    if (state.status === "revoked") return stop(plan, week, now, "the owner revoked the session");
-    const mismatch = limitsMismatch(plan, state);
-    if (mismatch) return skip(`refusing to act: ${mismatch}`, slot);
+    if (state.status === "expired") return stop(plan, period, now, "expired");
+    if (state.status === "revoked") return stop(plan, period, now, "revoked");
+    let grant: SessionGrant;
+    try {
+      grant = grantForPlan(plan, goldBuyer, state.blockTimestamp);
+    } catch (err) {
+      return skip(`refusing to act: the plan is not valid: ${(err as Error).message}`, "limits_mismatch", slot);
+    }
+    const mismatch = sessionLimitsMismatch(state, grant, goldBuyer);
+    if (mismatch) return skip(`refusing to act: ${mismatch}`, "limits_mismatch", slot);
 
-    const budget = plan.amountPerWeek + plan.feeAllowancePerBuy;
-    const remaining = state.usdtWeekly?.remaining ?? 0n;
-    if (remaining < budget) return skip("this purchase would exceed the weekly cap", slot);
-
-    const balances = await chain.balances(plan.walletAddress);
-    if (balances.usdt < budget) return skip("the wallet does not hold enough USD₮ for the purchase and its fee", slot);
-
-    if ((await storage.countAttempts(plan.id, week, slot, "not_bought")) >= maxFailuresPerWeek) {
-      return skip(`${maxFailuresPerWeek} attempts failed this week; waiting for next week`, slot);
+    const remaining = state.usdtCap?.remaining ?? 0n;
+    if (remaining < plan.amountPerBuy + sendHeadroom(plan)) {
+      return skip(`this purchase would exceed the ${plan.period === "day" ? "daily" : "weekly"} cap`, "cap_exceeded", slot);
     }
 
-    // 4. Price.
-    const quote = await chain.quote(plan.amountPerWeek);
-    if (!quote.withinBound) return skip(`price check failed: ${quote.reason}`, slot);
+    const balances = await chain.balances(plan.walletAddress);
+    if (balances.usdt < plan.amountPerBuy + sendHeadroom(plan)) {
+      return skip("the wallet does not hold enough USD₮ for the purchase and its fee", "insufficient_balance", slot);
+    }
+
+    if ((await storage.countAttempts(plan.id, period, slot, "not_bought")) >= maxFailuresPerPeriod) {
+      return skip(`${maxFailuresPerPeriod} attempts failed this ${plan.period}; waiting for the next one`, "too_many_failures", slot);
+    }
+
+    // 4. Price. Without a 30-minute TWAP GoldBuyer reverts "OLD": skip, retry on a later tick in this period.
+    const quote = await chain.quote(plan.amountPerBuy);
+    if (quote.twapTick === null) return skip(TWAP_UNAVAILABLE_REASON, "twap_unavailable", slot);
+    if (!quote.withinBound) return skip(`price check failed: ${quote.reason}`, "price_out_of_bound", slot);
     if (slot === "dip") {
       const last = mine[mine.length - 1]!;
       // quote price ≤ last price × (1 − dipBps)
@@ -247,16 +267,16 @@ export function createRunner(opts: RunnerOptions) {
       }
     }
 
-    const calls = buildBuyCalls(plan.amountPerWeek, quote.minOut, goldBuyer);
+    const calls = buildBuyCalls(plan.amountPerBuy, quote.minOut, goldBuyer);
     decodeBuyCalls(calls, goldBuyer); // refuses anything but the exact two-call purchase
 
     if (!executor) {
-      return { ...base, decision: "would_buy", slot, amountIn: plan.amountPerWeek, reason: `dry run; minOut ${quote.minOut}` };
+      return { ...base, decision: "would_buy", slot, amountIn: plan.amountPerBuy, reason: `dry run; minOut ${quote.minOut}` };
     }
 
     // 5. Claim the slot (the cross-process lock), then send once.
     const attempt = await storage.claimAttempt({
-      planId: plan.id, weekId: week, slot, startedAt: now, amountIn: plan.amountPerWeek, minOut: quote.minOut,
+      planId: plan.id, periodId: period, slot, startedAt: now, amountIn: plan.amountPerBuy, minOut: quote.minOut,
     });
     if (!attempt) return { ...base, decision: "waiting_on_earlier_attempt", reason: "another run holds this purchase" };
 
@@ -273,6 +293,8 @@ export function createRunner(opts: RunnerOptions) {
       return { ...base, decision: "error", reason: "the session key could not be decrypted (wrong AUTUMN_KEY_ENCRYPTION_KEY?)" };
     }
 
+    const boughtKind: RunLogKind = slot === "dip" ? "dip" : "weekly";
+    const boughtReason = slot === "dip" ? "dip purchase" : `${plan.period === "day" ? "daily" : "weekly"} purchase`;
     let failure: ExplainedFailure | undefined;
     let txHash: Hex | undefined;
     try {
@@ -284,7 +306,7 @@ export function createRunner(opts: RunnerOptions) {
         const landed = await recheck(plan, attempt, txHash);
         if (landed) {
           await storage.updateAttempt(attempt.id, { status: "bought", txHash: landed.txHash, out: landed.out });
-          await record({ planId: plan.id, weekId: week, at: now, outcome: "bought", reason: slot === "dip" ? "dip purchase" : "weekly purchase", txHash: landed.txHash, amountIn: landed.amountIn, out: landed.out });
+          await record({ planId: plan.id, periodId: period, at: now, outcome: "bought", reason: boughtReason, txHash: landed.txHash, amountIn: landed.amountIn, out: landed.out, kind: boughtKind });
           log("bought", { planId: plan.id, txHash: landed.txHash, out: String(landed.out) });
           return { ...base, decision: "bought", slot, txHash: landed.txHash, amountIn: landed.amountIn, out: landed.out };
         }
@@ -301,47 +323,51 @@ export function createRunner(opts: RunnerOptions) {
       const landed = await recheck(plan, attempt, txHash);
       if (landed) {
         await storage.updateAttempt(attempt.id, { status: "bought", txHash: landed.txHash, out: landed.out });
-        await record({ planId: plan.id, weekId: week, at: now, outcome: "bought", reason: "confirmed onchain after an unclear relay result", txHash: landed.txHash, amountIn: landed.amountIn, out: landed.out });
+        await record({ planId: plan.id, periodId: period, at: now, outcome: "bought", reason: "confirmed onchain after an unclear relay result", txHash: landed.txHash, amountIn: landed.amountIn, out: landed.out, kind: boughtKind });
         return { ...base, decision: "bought", slot, txHash: landed.txHash, amountIn: landed.amountIn, out: landed.out };
       }
       await storage.updateAttempt(attempt.id, { status: "ambiguous", reason: failure.message });
-      await record({ planId: plan.id, weekId: week, at: now, outcome: "ambiguous", reason: failure.message, ...(txHash ? { txHash } : {}) });
+      await record({ planId: plan.id, periodId: period, at: now, outcome: "ambiguous", reason: failure.message, kind: "relay_failure", ...(txHash ? { txHash } : {}) });
       return { ...base, decision: "ambiguous", slot, reason: failure.message, ...(txHash ? { txHash } : {}) };
+    }
+
+    if (failure.kind === "twap_unavailable") {
+      // Refused in simulation because the pool's 30-minute average is not available: not a failure.
+      await storage.updateAttempt(attempt.id, { status: "deferred", reason: failure.message });
+      return skip(TWAP_UNAVAILABLE_REASON, "twap_unavailable", slot);
     }
 
     await storage.updateAttempt(attempt.id, { status: "not_bought", reason: failure.message });
     if (failure.stopsPlan) {
       // Confirm from the chain before stopping: a relay message is not proof of revocation.
       const after = await chain.sessionState(plan.walletAddress, plan.sessionPublicKey);
-      if (after.status !== "active") {
-        return stop(plan, week, now, after.status === "expired" ? "the session has expired" : "the owner revoked the session");
-      }
+      if (after.status !== "active") return stop(plan, period, now, after.status === "expired" ? "expired" : "revoked");
     }
-    await record({ planId: plan.id, weekId: week, at: now, outcome: "failed", reason: failure.message, ...(txHash ? { txHash } : {}) });
-    return { ...base, decision: "failed", slot, reason: failure.message, ...(txHash ? { txHash } : {}) };
+    const kind: RunLogKind = failure.kind === "unknown" && txHash ? "reverted" : failure.kind;
+    await record({ planId: plan.id, periodId: period, at: now, outcome: "failed", reason: failure.message, kind, ...(txHash ? { txHash } : {}) });
+    return { ...base, decision: "failed", slot, reason: failure.message, kind, ...(txHash ? { txHash } : {}) };
   }
 
   /**
    * One pass over every active plan. Safe to call any number of times and
    * concurrently: a purchase is decided from the chain's GoldBuyer events for
-   * the calendar week and guarded by an attempt lock in storage.
+   * the plan's period and guarded by an attempt lock in storage.
    */
   async function tick(): Promise<TickReport> {
     const head = await chain.head();
     const now = head.timestamp;
-    const week = weekIdOf(now);
     const plans = await storage.listActivePlans();
     const weekPurchases = plans.length ? await chain.purchasesInWeek(now) : [];
     const reports: PlanReport[] = [];
     for (const plan of plans) {
       try {
-        reports.push(await processPlan(plan, { now, week, weekPurchases }));
+        reports.push(await processPlan(plan, { now, weekPurchases }));
       } catch (err) {
         log("plan error", { planId: plan.id, error: (err as Error).message });
         reports.push({ planId: plan.id, decision: "error", reason: (err as Error).message });
       }
     }
-    return { block: head.number, at: now, weekId: week, plans: reports };
+    return { block: head.number, at: now, weekId: weekIdOf(now), plans: reports };
   }
 
   return { tick };

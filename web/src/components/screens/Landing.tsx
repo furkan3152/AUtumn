@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import type { GramClient } from "@/lib/gram";
-import { errorText } from "@/lib/useGram";
+import type { AutumnClient, GoldPrice } from "@/lib/autumn";
+import { formatDateTime, perGram, usdt } from "@/lib/format";
+import { errorText } from "@/lib/useAutumn";
 import { Logo } from "../Logo";
 import { Scene } from "../Scene";
 import { Button, Panel, Spinner } from "../ui";
@@ -20,19 +21,22 @@ const STEPS = [
   },
 ];
 
-export function Landing(props: { connected: false } | { connected: true; client: GramClient }) {
-  const [busy, setBusy] = useState(false);
+type LandingProps = { price: GoldPrice | null; notices?: string[] } & ({ connected: false } | { connected: true; client: AutumnClient });
+
+export function Landing(props: LandingProps) {
+  const [busy, setBusy] = useState<null | "create" | "restore">(null);
   const [error, setError] = useState<string | null>(null);
 
-  const create = async () => {
+  const run = async (kind: "create" | "restore") => {
     if (!props.connected) return;
-    setBusy(true);
+    setBusy(kind);
     setError(null);
     try {
-      await props.client.createWallet();
+      if (kind === "create") await props.client.createWallet();
+      else await props.client.restoreWallet();
     } catch (e) {
       setError(errorText(e));
-      setBusy(false);
+      setBusy(null);
     }
   };
 
@@ -47,6 +51,17 @@ export function Landing(props: { connected: false } | { connected: true; client:
           A helper buys Tether Gold for you with USD₮ on Celo, only within limits written onchain, and you can stop it
           any time.
         </p>
+        {props.price && (
+          <p className="muted small landing__price">
+            Gold now: <span className="num">{usdt(perGram(props.price.usdtPerOunce))}</span> USD₮ per gram on Celo, checked{" "}
+            <span className="num">{formatDateTime(props.price.observedAt)}</span>.
+          </p>
+        )}
+        {props.notices?.map((n) => (
+          <p key={n} className="muted small">
+            {n}
+          </p>
+        ))}
       </div>
 
       <div className="landing__scene">
@@ -69,13 +84,22 @@ export function Landing(props: { connected: false } | { connected: true; client:
 
       {props.connected ? (
         <div className="cta">
-          <Button block onClick={create} disabled={busy}>
-            {busy ? (
+          <Button block onClick={() => run("create")} disabled={busy !== null}>
+            {busy === "create" ? (
               <>
                 <Spinner /> Waiting for your passkey…
               </>
             ) : (
               "Create wallet with passkey"
+            )}
+          </Button>
+          <Button variant="plain" block onClick={() => run("restore")} disabled={busy !== null}>
+            {busy === "restore" ? (
+              <>
+                <Spinner /> Waiting for your passkey…
+              </>
+            ) : (
+              "I already have an Autumn passkey"
             )}
           </Button>
           {error && (

@@ -1,6 +1,7 @@
 import { getAddress, type Address, type Hex } from "viem";
 import type { CallPermission, SerializedSession, SessionPermissions, SpendPermission } from "@altananetwork/sdk";
 import { USDT } from "./constants.js";
+import { isPlanPeriod, type PlanPeriod } from "./period.js";
 
 /** The selectors the session may call, and nothing else. */
 export const APPROVE_SIGNATURE = "approve(address,uint256)";
@@ -8,28 +9,30 @@ export const BUY_SIGNATURE = "buy(uint256,uint256)";
 
 /**
  * Default per-purchase allowance for the relay fee, which a session paying in
- * USD₮ draws from the same weekly cap. Altana reports about $0.005 per session
+ * USD₮ draws from the same period cap. Altana reports about $0.005 per session
  * transaction on Celo mainnet; 0.05 USD₮ leaves 10x headroom. Explicit, so the
  * owner sees exactly what the cap covers.
  */
 export const DEFAULT_FEE_ALLOWANCE_PER_BUY = 50_000n; // 0.05 USD₮
 
-/** Smallest weekly amount accepted: below this, 6-decimal XAUt0 rounding and fees dominate. */
-export const MIN_WEEKLY_AMOUNT = 1_000_000n; // 1 USD₮
+/** Smallest amount per purchase: below this, 6-decimal XAUt0 rounding and fees dominate. */
+export const MIN_AMOUNT_PER_BUY = 1_000_000n; // 1 USD₮
 /** Longest session a plan may grant. */
 export const MAX_SESSION_SECS = 366 * 86_400;
 
 export type Plan = {
-  /** USD₮ (6-decimal base units) spent on gold each week. */
-  amountPerWeek: bigint;
+  /** USD₮ (6-decimal base units) spent on gold in each scheduled purchase. */
+  amountPerBuy: bigint;
+  /** How often the plan buys, and the spend period the cap is metered over. Default "week". */
+  period?: PlanPeriod;
   /** Session expiry, unix seconds. */
   expiresAt: number;
   /** USD₮ base units reserved per purchase for the relay fee. Default DEFAULT_FEE_ALLOWANCE_PER_BUY. */
   feeAllowancePerBuy?: bigint;
   /**
-   * Optional second rule: one extra purchase in a week when the price is at
-   * least 2% below the plan's last purchase. The cap is sized for two
-   * purchases when this is on, and only then.
+   * Optional second rule: one extra purchase in a period when the price is at
+   * least 2% below the plan's last purchase in that period. The cap is sized
+   * for two purchases when this is on, and only then.
    */
   dipBuy?: boolean;
 };
@@ -41,16 +44,21 @@ export type SessionGrant = {
   };
   expiry: number;
   feeToken: Address;
-  /** Purchases per week the cap is sized for (1, or 2 with dipBuy). */
-  buysPerWeek: number;
-  /** The weekly USD₮ cap, the same value as `permissions.spend[0].limit`. */
-  weeklyCap: bigint;
+  period: PlanPeriod;
+  /** Purchases per period the cap is sized for (1, or 2 with dipBuy). */
+  buysPerPeriod: number;
+  /** The USD₮ cap per period, the same value as `permissions.spend[0].limit`. */
+  periodCap: bigint;
   /** The part of the cap that is fee allowance. */
   feeAllowance: bigint;
 };
 
-export function buysPerWeek(plan: Pick<Plan, "dipBuy">): number {
+export function buysPerPeriod(plan: Pick<Plan, "dipBuy">): number {
   return plan.dipBuy ? 2 : 1;
+}
+
+export function periodOf(plan: Pick<Plan, "period">): PlanPeriod {
+  return plan.period ?? "week";
 }
 
 export function feeAllowanceOf(plan: Pick<Plan, "feeAllowancePerBuy">): bigint {
@@ -58,17 +66,18 @@ export function feeAllowanceOf(plan: Pick<Plan, "feeAllowancePerBuy">): bigint {
 }
 
 /** The USD₮ a single purchase may move: the plan amount plus its fee allowance. */
-export function perBuyBudget(plan: Pick<Plan, "amountPerWeek" | "feeAllowancePerBuy">): bigint {
-  return plan.amountPerWeek + feeAllowanceOf(plan);
+export function perBuyBudget(plan: Pick<Plan, "amountPerBuy" | "feeAllowancePerBuy">): bigint {
+  return plan.amountPerBuy + feeAllowanceOf(plan);
 }
 
 export function validatePlan(plan: Plan, nowSecs: number): void {
-  if (typeof plan.amountPerWeek !== "bigint" || plan.amountPerWeek < MIN_WEEKLY_AMOUNT) {
-    throw new Error(`amountPerWeek must be at least ${MIN_WEEKLY_AMOUNT} base units (1 USD₮)`);
+  if (typeof plan.amountPerBuy !== "bigint" || plan.amountPerBuy < MIN_AMOUNT_PER_BUY) {
+    throw new Error(`amountPerBuy must be at least ${MIN_AMOUNT_PER_BUY} base units (1 USD₮)`);
   }
+  if (!isPlanPeriod(periodOf(plan))) throw new Error('period must be "day" or "week"');
   const fee = feeAllowanceOf(plan);
-  if (fee < 0n || fee > plan.amountPerWeek / 10n) {
-    throw new Error("feeAllowancePerBuy must be between 0 and 10% of amountPerWeek");
+  if (fee < 0n || fee > plan.amountPerBuy / 10n) {
+    throw new Error("feeAllowancePerBuy must be between 0 and 10% of amountPerBuy");
   }
   if (!Number.isInteger(plan.expiresAt) || plan.expiresAt <= nowSecs) {
     throw new Error("expiresAt must be a unix time in seconds in the future");
@@ -80,9 +89,10 @@ export function validatePlan(plan: Plan, nowSecs: number): void {
 
 /**
  * The exact grantSession parameters for a plan:
- * - spend: one weekly USD₮ cap = (amount + fee allowance) × purchases per week.
- *   Because USD₮ already has a cap, the SDK adds no separate daily fee cap,
- *   and relay fees come out of this cap (derisk RESULTS.md §3.4).
+ * - spend: one USD₮ cap per period ("day" or "week") = (amount + fee
+ *   allowance) × purchases per period. Because USD₮ already has a cap, the
+ *   SDK adds no separate daily fee cap, and relay fees come out of this cap
+ *   (derisk RESULTS.md §3.4).
  * - calls: USD₮.approve and GoldBuyer.buy, nothing else.
  * - expiry, and feeToken USD₮.
  *
@@ -92,21 +102,23 @@ export function validatePlan(plan: Plan, nowSecs: number): void {
  */
 export function planToSessionGrant(plan: Plan, goldBuyer: Address, nowSecs: number): SessionGrant {
   validatePlan(plan, nowSecs);
-  const n = buysPerWeek(plan);
+  const period = periodOf(plan);
+  const n = buysPerPeriod(plan);
   const feeAllowance = feeAllowanceOf(plan) * BigInt(n);
-  const weeklyCap = plan.amountPerWeek * BigInt(n) + feeAllowance;
+  const periodCap = plan.amountPerBuy * BigInt(n) + feeAllowance;
   return {
     permissions: {
       calls: [
         { to: USDT, signature: APPROVE_SIGNATURE },
         { to: getAddress(goldBuyer), signature: BUY_SIGNATURE },
       ],
-      spend: [{ token: USDT, limit: weeklyCap, period: "week" }],
+      spend: [{ token: USDT, limit: periodCap, period }],
     },
     expiry: plan.expiresAt,
     feeToken: USDT,
-    buysPerWeek: n,
-    weeklyCap,
+    period,
+    buysPerPeriod: n,
+    periodCap,
     feeAllowance,
   };
 }

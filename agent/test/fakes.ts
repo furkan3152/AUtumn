@@ -9,8 +9,12 @@ import {
   sessionKeyIds,
   SPEND_PERIOD,
   USDT,
+  nextPeriodStart,
+  periodStart,
   weekStart,
   type Balances,
+  type PlanPeriod,
+  type TxFacts,
   type BuyQuote,
   type Call,
   type Purchase,
@@ -36,6 +40,13 @@ export class FakeChain implements ChainReader {
     { target: GOLD_BUYER, selector: toFunctionSelector("buy(uint256,uint256)") },
   ];
   sessionReads = 0;
+  /** The spend period the fake account meters the session's USD₮ cap over. */
+  period: PlanPeriod = "week";
+  /** The expiry the fake account stores for the key (set to the grant's expiry by tests). */
+  expiry = 0;
+  /** Receipts for grant/revoke transactions, by hash. */
+  txs = new Map<string, TxFacts>();
+  quoteTwap = true;
 
   constructor(now: number) {
     this.now = now;
@@ -50,7 +61,7 @@ export class FakeChain implements ChainReader {
     };
     this.purchases.push(p);
     this.receipts.set(txHash.toLowerCase(), [p]);
-    if (weekStart(at) === weekStart(this.now)) this.spent += amountIn + 3_000n;
+    if (periodStart(at, this.period) === periodStart(this.now, this.period)) this.spent += amountIn + 3_000n;
     this.usdt -= amountIn + 3_000n;
     return p;
   }
@@ -62,14 +73,17 @@ export class FakeChain implements ChainReader {
     this.sessionReads++;
     const { keyId, keyHash } = sessionKeyIds(publicKey);
     const on = this.status !== "revoked";
+    const ps = periodStart(this.now, this.period);
     const spend = on
-      ? [{ token: getAddress(USDT), period: SPEND_PERIOD.week, limit: this.cap, spentThisPeriod: this.spent, periodStart: weekStart(this.now) }]
+      ? [{ token: getAddress(USDT), period: SPEND_PERIOD[this.period], limit: this.cap, spentThisPeriod: this.spent, periodStart: ps }]
       : [];
     return {
       status: this.status, keyId, keyHash, keyStoreValid: on, onAccount: on,
-      ...(on ? { accountExpiry: this.now + 86_400 } : {}),
+      ...(on ? { accountExpiry: this.expiry } : {}),
       spend, allowedCalls: on ? this.allowedCalls : [],
-      ...(on ? { usdtWeekly: { limit: this.cap, spent: this.spent, remaining: this.cap > this.spent ? this.cap - this.spent : 0n, weekStart: weekStart(this.now) } } : {}),
+      ...(on
+        ? { usdtCap: { period: this.period, limit: this.cap, spent: this.spent, remaining: this.cap > this.spent ? this.cap - this.spent : 0n, periodStart: ps, resetsAt: nextPeriodStart(this.now, this.period) } }
+        : {}),
       blockNumber: this.block, blockTimestamp: this.now,
     };
   }
@@ -80,15 +94,21 @@ export class FakeChain implements ChainReader {
     const ws = weekStart(at);
     return this.purchases.filter((p) => p.timestamp >= ws && p.timestamp < ws + 604_800 && p.timestamp <= this.now);
   }
+  async txFacts(txHash: Hex, _wallet: Address): Promise<TxFacts | null> {
+    return this.txs.get(txHash.toLowerCase()) ?? null;
+  }
   async purchasesInTx(txHash: Hex): Promise<Purchase[] | null> {
     return this.receipts.get(txHash.toLowerCase()) ?? null;
   }
   async quote(amountIn: bigint): Promise<BuyQuote> {
     const out = (this.quoteOut * amountIn) / 5_000_000n;
     return {
-      amountIn, amountOut: out, minOut: (out * 9950n) / 10_000n, twapAmountOut: out, twapDeviationBps: 0, twapTick: -81_700,
-      tickAfter: -81_700, withinBound: this.quoteWithin,
-      ...(this.quoteWithin ? {} : { reason: "the quote is 3.00% below the 30-minute average price (limit 1.00%)" }),
+      amountIn, amountOut: out, minOut: (out * 9950n) / 10_000n,
+      twapAmountOut: this.quoteTwap ? out : null, twapDeviationBps: this.quoteTwap ? 0 : null, twapTick: this.quoteTwap ? -81_700 : null,
+      tickAfter: -81_700, withinBound: this.quoteWithin && this.quoteTwap,
+      ...(!this.quoteTwap
+        ? { reason: "the pool has less than 30 minutes of price history, so GoldBuyer would refuse the purchase" }
+        : this.quoteWithin ? {} : { reason: "the quote is 3.00% below the 30-minute average price (limit 1.00%)" }),
       priceUsdtPerXaut: priceUsdtPerXaut(amountIn, out), blockNumber: this.block,
     };
   }

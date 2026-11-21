@@ -7,6 +7,7 @@ import {
   readPurchasesInTx,
   readPurchasesInWeek,
   readSessionState,
+  readTxFacts,
   USDT,
   type AutumnConfig,
   type QuoteOptions,
@@ -35,6 +36,7 @@ export function createChainReader(
       }),
     purchasesInTx: (txHash) => readPurchasesInTx(client, cfg.goldBuyer, txHash),
     quote: (amountIn) => quoteBuy(client, amountIn, opts.quote),
+    txFacts: (txHash, wallet) => readTxFacts(client, txHash, wallet),
   };
 }
 
@@ -45,6 +47,7 @@ export function createChainReader(
  */
 export function createAltanaExecutor(rpcUrl?: string): SessionExecutor {
   const network = rpcUrl ? { ...CELO, publicRpcUrl: rpcUrl } : CELO;
+  // agentIdentity: false — the runner only ever acts with a session key; it never registers identities.
   const client = createClient({ chains: [network], agentIdentity: false });
   return {
     async execute({ session, privateKey, calls }) {

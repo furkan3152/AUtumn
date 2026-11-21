@@ -6,7 +6,7 @@ import { getAddress, type Address } from "viem";
  */
 export const CELO_CHAIN_ID = 42220 as const;
 
-/** Public Celo RPC used by default for reads. Override with `CELO_RPC_URL`. */
+/** Public Celo RPC used by default for reads. Override with `AUTUMN_CELO_RPC_URL`. */
 export const DEFAULT_CELO_RPC_URL = "https://forno.celo.org";
 
 /** Tether USD₮ on Celo, 6 decimals. Spend cap token and relay fee token. */
@@ -27,6 +27,12 @@ export const QUOTER_V2: Address = "0x82825d0554fA07f7FC52Ab63c961F330fdEFa8E8";
 
 /** Altana KeyStore on Celo mainnet (from @altananetwork/sdk 1.1.0 `CELO.keyStore`). */
 export const ALTANA_KEYSTORE: Address = "0x83b30935f36d6ccf9B1ec3b5E47F2866b97cd27c";
+
+/** Altana KeyStoreController on Celo mainnet (SDK `CELO.keyStoreController`): registration fees in CELO. */
+export const ALTANA_KEYSTORE_CONTROLLER: Address = "0x47bA5fc2A5b0CcB24BA3fAC9D4B59400eE9fd1D6";
+
+/** ERC-8004 identity registry on Celo (docs.altana.network, "ERC-8004: agent identity"; code present 2026-11-21). */
+export const ERC8004_IDENTITY_REGISTRY: Address = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432";
 
 /** ERC-8021 attribution code for this project (@celo/attribution-tags). */
 export const ATTRIBUTION_CODE = "celo_c24c5a65e5a3";
@@ -52,22 +58,24 @@ export type AutumnConfig = {
  * Reads AutumnConfig from an env-like object. Throws on a missing or malformed
  * GoldBuyer address: nothing should quietly fall back to a guessed contract.
  *
- * - `GOLD_BUYER_ADDRESS` (required)
- * - `GOLD_BUYER_DEPLOY_BLOCK` (required: purchase history is read from it)
- * - `CELO_RPC_URL` (optional, default forno)
+ * - `AUTUMN_GOLD_BUYER_ADDRESS` (required)
+ * - `AUTUMN_GOLD_BUYER_DEPLOY_BLOCK` (required: purchase history is read from it)
+ * - `AUTUMN_CELO_RPC_URL` (optional, default forno)
+ *
+ * `prefix` lets the browser read the same settings from `NEXT_PUBLIC_AUTUMN_…`.
  */
-export function configFromEnv(env: Record<string, string | undefined>): AutumnConfig {
-  const raw = env.GOLD_BUYER_ADDRESS;
+export function configFromEnv(env: Record<string, string | undefined>, prefix = "AUTUMN_"): AutumnConfig {
+  const raw = env[`${prefix}GOLD_BUYER_ADDRESS`];
   if (!raw || !/^0x[0-9a-fA-F]{40}$/.test(raw)) {
-    throw new Error("GOLD_BUYER_ADDRESS is missing or not a 20-byte hex address");
+    throw new Error(`${prefix}GOLD_BUYER_ADDRESS is missing or not a 20-byte hex address`);
   }
-  const block = env.GOLD_BUYER_DEPLOY_BLOCK;
+  const block = env[`${prefix}GOLD_BUYER_DEPLOY_BLOCK`];
   if (!block || !/^\d+$/.test(block)) {
-    throw new Error("GOLD_BUYER_DEPLOY_BLOCK is missing or not a block number");
+    throw new Error(`${prefix}GOLD_BUYER_DEPLOY_BLOCK is missing or not a block number`);
   }
   return {
     goldBuyer: getAddress(raw),
     goldBuyerDeployBlock: BigInt(block),
-    rpcUrl: env.CELO_RPC_URL || DEFAULT_CELO_RPC_URL,
+    rpcUrl: env[`${prefix}CELO_RPC_URL`] || DEFAULT_CELO_RPC_URL,
   };
 }

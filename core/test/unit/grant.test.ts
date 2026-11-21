@@ -17,15 +17,15 @@ const PK = ("0x04" + "ab".repeat(64)) as `0x${string}`;
 
 describe("planToSessionGrant", () => {
   it("caps USD₮ per calendar week at the plan amount plus an explicit fee allowance", () => {
-    const g = planToSessionGrant({ amountPerWeek: 5_000_000n, expiresAt: NOW + 30 * 86400 }, GB, NOW);
+    const g = planToSessionGrant({ amountPerBuy: 5_000_000n, expiresAt: NOW + 30 * 86400 }, GB, NOW);
     expect(g.permissions.spend).toEqual([{ token: USDT, limit: 5_050_000n, period: "week" }]);
-    expect(g.weeklyCap).toBe(5_000_000n + DEFAULT_FEE_ALLOWANCE_PER_BUY);
+    expect(g.periodCap).toBe(5_000_000n + DEFAULT_FEE_ALLOWANCE_PER_BUY);
     expect(g.feeAllowance).toBe(DEFAULT_FEE_ALLOWANCE_PER_BUY);
-    expect(g.buysPerWeek).toBe(1);
+    expect(g.buysPerPeriod).toBe(1);
   });
 
   it("allows exactly USD₮.approve and GoldBuyer.buy", () => {
-    const g = planToSessionGrant({ amountPerWeek: 5_000_000n, expiresAt: NOW + 86400 }, GB, NOW);
+    const g = planToSessionGrant({ amountPerBuy: 5_000_000n, expiresAt: NOW + 86400 }, GB, NOW);
     expect(g.permissions.calls).toEqual([
       { to: USDT, signature: "approve(address,uint256)" },
       { to: getAddress(GB), signature: "buy(uint256,uint256)" },
@@ -35,26 +35,35 @@ describe("planToSessionGrant", () => {
   });
 
   it("sets expiry and the USD₮ fee token", () => {
-    const g = planToSessionGrant({ amountPerWeek: 2_000_000n, expiresAt: NOW + 7 * 86400 }, GB, NOW);
+    const g = planToSessionGrant({ amountPerBuy: 2_000_000n, expiresAt: NOW + 7 * 86400 }, GB, NOW);
     expect(g.expiry).toBe(NOW + 7 * 86400);
     expect(g.feeToken).toBe(USDT);
   });
 
   it("sizes the cap for two purchases only when the dip rule is on", () => {
-    const g = planToSessionGrant({ amountPerWeek: 5_000_000n, expiresAt: NOW + 86400, dipBuy: true, feeAllowancePerBuy: 20_000n }, GB, NOW);
-    expect(g.weeklyCap).toBe(10_040_000n);
-    expect(g.buysPerWeek).toBe(2);
+    const g = planToSessionGrant({ amountPerBuy: 5_000_000n, expiresAt: NOW + 86400, dipBuy: true, feeAllowancePerBuy: 20_000n }, GB, NOW);
+    expect(g.periodCap).toBe(10_040_000n);
+    expect(g.buysPerPeriod).toBe(2);
+  });
+
+  it("meters a daily plan per UTC day, with the same per-buy budget", () => {
+    const g = planToSessionGrant({ amountPerBuy: 1_000_000n, period: "day", expiresAt: NOW + 86400 }, GB, NOW);
+    expect(g.permissions.spend).toEqual([{ token: USDT, limit: 1_050_000n, period: "day" }]);
+    expect(g.period).toBe("day");
+    const dip = planToSessionGrant({ amountPerBuy: 1_000_000n, period: "day", dipBuy: true, expiresAt: NOW + 86400 }, GB, NOW);
+    expect(dip.periodCap).toBe(2_100_000n);
+    expect(() => planToSessionGrant({ amountPerBuy: 1_000_000n, period: "month" as never, expiresAt: NOW + 86400 }, GB, NOW)).toThrow(/period/);
   });
 
   it("rejects unsafe plans", () => {
-    expect(() => planToSessionGrant({ amountPerWeek: 999_999n, expiresAt: NOW + 86400 }, GB, NOW)).toThrow(/at least/);
-    expect(() => planToSessionGrant({ amountPerWeek: 5_000_000n, expiresAt: NOW }, GB, NOW)).toThrow(/future/);
-    expect(() => planToSessionGrant({ amountPerWeek: 5_000_000n, expiresAt: NOW + 400 * 86400 }, GB, NOW)).toThrow(/year/);
-    expect(() => planToSessionGrant({ amountPerWeek: 5_000_000n, expiresAt: NOW + 86400, feeAllowancePerBuy: 600_000n }, GB, NOW)).toThrow(/10%/);
+    expect(() => planToSessionGrant({ amountPerBuy: 999_999n, expiresAt: NOW + 86400 }, GB, NOW)).toThrow(/at least/);
+    expect(() => planToSessionGrant({ amountPerBuy: 5_000_000n, expiresAt: NOW }, GB, NOW)).toThrow(/future/);
+    expect(() => planToSessionGrant({ amountPerBuy: 5_000_000n, expiresAt: NOW + 400 * 86400 }, GB, NOW)).toThrow(/year/);
+    expect(() => planToSessionGrant({ amountPerBuy: 5_000_000n, expiresAt: NOW + 86400, feeAllowancePerBuy: 600_000n }, GB, NOW)).toThrow(/10%/);
   });
 
   it("recognises exactly the expected serialized session", () => {
-    const g = planToSessionGrant({ amountPerWeek: 5_000_000n, expiresAt: NOW + 86400 }, GB, NOW);
+    const g = planToSessionGrant({ amountPerBuy: 5_000_000n, expiresAt: NOW + 86400 }, GB, NOW);
     const exp = expectedSerializedSession(g, WALLET, PK);
     expect(exp.permissions.spend?.[0]?.limit).toBe("5050000");
     expect(sessionMatchesGrant(JSON.parse(JSON.stringify(exp)), exp)).toBe(true);

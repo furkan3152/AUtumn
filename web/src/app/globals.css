@@ -1106,3 +1106,23 @@ body:has(.landing) .header {
     transition: none !important;
   }
 }
+
+/* Live data notices and the second landing action */
+.cta .btn + .btn {
+  margin-top: 0.75rem;
+}
+.notices {
+  margin: 0 auto 1rem;
+}
+.notices p {
+  margin: 0.25rem 0;
+}
+.landing__price {
+  margin: 0;
+}
+.presets + .presets {
+  margin-top: 1rem;
+}
+.presets__row--two {
+  grid-template-columns: repeat(2, 1fr);
+}

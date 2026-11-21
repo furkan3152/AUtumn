@@ -4,14 +4,16 @@ import path from "node:path";
 import pg from "pg";
 import { getAddress, type Address, type Hex } from "viem";
 import type { SerializedSession } from "@altananetwork/sdk";
-import type { Attempt, AttemptSlot, AttemptStatus, EncryptedKey, NewAttempt, PlanRecord, RunLogEntry } from "../types.js";
+import type { PlanPeriod } from "@autumn/core";
+import type { Attempt, AttemptSlot, AttemptStatus, EncryptedKey, NewAttempt, PlanRecord, RunLogEntry, RunLogKind } from "../types.js";
 import type { NewPlan, Storage } from "./types.js";
 
-export const MIGRATIONS_DIR = fileURLToPath(new URL("../../migrations/", import.meta.url));
+/** agent/migrations, found from this module's own location at run time (not a bundler-visible asset URL). */
+export const MIGRATIONS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "migrations");
 
 /** Applies migrations/*.sql in name order, once each, inside a transaction per file. */
 export async function migrate(pool: pg.Pool, dir = MIGRATIONS_DIR): Promise<string[]> {
-  const files = (await readdir(dir)).filter((f) => f.endsWith(".sql")).sort();
+  const files = (await readdir(/*turbopackIgnore: true*/ dir)).filter((f) => f.endsWith(".sql")).sort();
   const client = await pool.connect();
   const applied: string[] = [];
   try {
@@ -22,7 +24,7 @@ export async function migrate(pool: pg.Pool, dir = MIGRATIONS_DIR): Promise<stri
         await client.query("LOCK TABLE schema_migrations IN EXCLUSIVE MODE");
         const done = await client.query("SELECT 1 FROM schema_migrations WHERE name = $1", [f]);
         if (done.rowCount === 0) {
-          await client.query(await readFile(path.join(dir, f), "utf8"));
+          await client.query(await readFile(/*turbopackIgnore: true*/ path.join(dir, f), "utf8"));
           await client.query("INSERT INTO schema_migrations (name) VALUES ($1)", [f]);
           applied.push(f);
         }
@@ -42,7 +44,8 @@ type PlanRow = {
   id: string;
   owner_id: string;
   wallet_address: string;
-  amount_per_week: string;
+  amount_per_buy: string;
+  period: PlanPeriod;
   fee_allowance_per_buy: string;
   dip_buy: boolean;
   day_of_week: number;
@@ -53,6 +56,10 @@ type PlanRow = {
   session_public_key: string;
   session: SerializedSession | null;
   created_at: string;
+  created_block: string | null;
+  grant_tx_hash: string | null;
+  stop_tx_hash: string | null;
+  stopped_at: string | null;
 };
 
 function planFromRow(r: PlanRow): PlanRecord {
@@ -60,7 +67,8 @@ function planFromRow(r: PlanRow): PlanRecord {
     id: r.id,
     ownerId: r.owner_id,
     walletAddress: getAddress(r.wallet_address),
-    amountPerWeek: BigInt(r.amount_per_week),
+    amountPerBuy: BigInt(r.amount_per_buy),
+    period: r.period,
     feeAllowancePerBuy: BigInt(r.fee_allowance_per_buy),
     dipBuy: r.dip_buy,
     dayOfWeek: r.day_of_week,
@@ -71,13 +79,17 @@ function planFromRow(r: PlanRow): PlanRecord {
     sessionPublicKey: r.session_public_key as Hex,
     ...(r.session ? { session: r.session } : {}),
     createdAt: Number(r.created_at),
+    ...(r.created_block !== null ? { createdBlock: BigInt(r.created_block) } : {}),
+    ...(r.grant_tx_hash ? { grantTxHash: r.grant_tx_hash as Hex } : {}),
+    ...(r.stop_tx_hash ? { stopTxHash: r.stop_tx_hash as Hex } : {}),
+    ...(r.stopped_at !== null ? { stoppedAt: Number(r.stopped_at) } : {}),
   };
 }
 
 type AttemptRow = {
   id: string;
   plan_id: string;
-  week_id: string;
+  period_id: string;
   slot: AttemptSlot;
   status: AttemptStatus;
   started_at: string;
@@ -93,7 +105,7 @@ function attemptFromRow(r: AttemptRow): Attempt {
   return {
     id: String(r.id),
     planId: r.plan_id,
-    weekId: r.week_id,
+    periodId: r.period_id,
     slot: r.slot,
     status: r.status,
     startedAt: Number(r.started_at),
@@ -106,8 +118,36 @@ function attemptFromRow(r: AttemptRow): Attempt {
   };
 }
 
+type RunLogRow = {
+  plan_id: string;
+  period_id: string;
+  at: string;
+  outcome: RunLogEntry["outcome"];
+  reason: string;
+  tx_hash: string | null;
+  amount_in: string | null;
+  out_amount: string | null;
+  kind: RunLogKind | null;
+};
+
+function runLogFromRow(x: RunLogRow): RunLogEntry {
+  return {
+    planId: x.plan_id,
+    periodId: x.period_id,
+    at: Number(x.at),
+    outcome: x.outcome,
+    reason: x.reason,
+    ...(x.tx_hash ? { txHash: x.tx_hash as Hex } : {}),
+    ...(x.amount_in !== null ? { amountIn: BigInt(x.amount_in) } : {}),
+    ...(x.out_amount !== null ? { out: BigInt(x.out_amount) } : {}),
+    ...(x.kind ? { kind: x.kind } : {}),
+  };
+}
+
 const ATTEMPT_COLS =
-  "id, plan_id, to_char(week_id, 'YYYY-MM-DD') AS week_id, slot, status, started_at, amount_in, min_out, calls_id, tx_hash, out_amount, reason";
+  "id, plan_id, to_char(period_id, 'YYYY-MM-DD') AS period_id, slot, status, started_at, amount_in, min_out, calls_id, tx_hash, out_amount, reason";
+const RUN_LOG_COLS =
+  "plan_id, to_char(period_id, 'YYYY-MM-DD') AS period_id, at, outcome, reason, tx_hash, amount_in, out_amount, kind";
 
 /** Postgres storage over plain `pg`. Run `migrate(pool)` once before use. */
 export class PgStorage implements Storage {
@@ -133,14 +173,15 @@ export class PgStorage implements Storage {
         [plan.walletAddress.toLowerCase()],
       );
       const r = await client.query<PlanRow>(
-        `INSERT INTO plans (id, owner_id, wallet_address, amount_per_week, fee_allowance_per_buy, dip_buy, day_of_week, hour_utc,
-                            expires_at, session_public_key, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+        `INSERT INTO plans (id, owner_id, wallet_address, amount_per_buy, period, fee_allowance_per_buy, dip_buy, day_of_week,
+                            hour_utc, expires_at, session_public_key, created_at, created_block)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
         [
           plan.id,
           owner.rows[0]!.id,
           plan.walletAddress.toLowerCase(),
-          plan.amountPerWeek.toString(),
+          plan.amountPerBuy.toString(),
+          plan.period,
           plan.feeAllowancePerBuy.toString(),
           plan.dipBuy,
           plan.dayOfWeek,
@@ -148,6 +189,7 @@ export class PgStorage implements Storage {
           plan.expiresAt,
           plan.sessionPublicKey.toLowerCase(),
           plan.createdAt,
+          plan.createdBlock?.toString() ?? null,
         ],
       );
       await client.query(
@@ -165,6 +207,7 @@ export class PgStorage implements Storage {
   }
 
   async getPlan(planId: string): Promise<PlanRecord | null> {
+    if (!UUID.test(planId)) return null;
     const r = await this.pool.query<PlanRow>("SELECT * FROM plans WHERE id = $1", [planId]);
     return r.rows[0] ? planFromRow(r.rows[0]) : null;
   }
@@ -174,20 +217,39 @@ export class PgStorage implements Storage {
     return r.rows.map(planFromRow);
   }
 
-  async activatePlan(planId: string, session: SerializedSession): Promise<void> {
+  async listPlansForWallet(walletAddress: Address): Promise<PlanRecord[]> {
+    const r = await this.pool.query<PlanRow>("SELECT * FROM plans WHERE wallet_address = $1 ORDER BY created_at DESC, id", [
+      walletAddress.toLowerCase(),
+    ]);
+    return r.rows.map(planFromRow);
+  }
+
+  async countPendingPlans(walletAddress: Address, since: number): Promise<number> {
+    const r = await this.pool.query<{ n: string }>(
+      "SELECT count(*) AS n FROM plans WHERE wallet_address = $1 AND status = 'pending_grant' AND created_at >= $2",
+      [walletAddress.toLowerCase(), since],
+    );
+    return Number(r.rows[0]!.n);
+  }
+
+  async activatePlan(planId: string, session: SerializedSession, grantTxHash?: Hex): Promise<void> {
     const r = await this.pool.query(
-      "UPDATE plans SET status = 'active', session = $2, updated_at = now() WHERE id = $1 AND status = 'pending_grant'",
-      [planId, JSON.stringify(session)],
+      `UPDATE plans SET status = 'active', session = $2, grant_tx_hash = $3, updated_at = now()
+       WHERE id = $1 AND status = 'pending_grant'`,
+      [planId, JSON.stringify(session), grantTxHash?.toLowerCase() ?? null],
     );
     if (r.rowCount !== 1) throw new Error("plan is not waiting for a grant");
   }
 
-  async stopPlan(planId: string, reason: string): Promise<void> {
+  async stopPlan(planId: string, reason: string, at?: number, txHash?: Hex): Promise<void> {
     const r = await this.pool.query(
-      "UPDATE plans SET status = 'stopped', stopped_reason = $2, updated_at = now() WHERE id = $1",
-      [planId, reason],
+      `UPDATE plans SET status = 'stopped', stopped_reason = $2, stopped_at = $3, stop_tx_hash = $4, updated_at = now()
+       WHERE id = $1 AND status <> 'stopped'`,
+      [planId, reason, at ?? null, txHash?.toLowerCase() ?? null],
     );
-    if (r.rowCount !== 1) throw new Error("no such plan");
+    if (r.rowCount === 1) return;
+    const exists = await this.pool.query("SELECT 1 FROM plans WHERE id = $1", [planId]);
+    if (exists.rowCount !== 1) throw new Error("no such plan");
   }
 
   async getEncryptedSessionKey(planId: string): Promise<EncryptedKey | null> {
@@ -201,11 +263,11 @@ export class PgStorage implements Storage {
 
   async claimAttempt(a: NewAttempt): Promise<Attempt | null> {
     const r = await this.pool.query<AttemptRow>(
-      `INSERT INTO purchase_attempts (plan_id, week_id, slot, status, started_at, amount_in, min_out)
+      `INSERT INTO purchase_attempts (plan_id, period_id, slot, status, started_at, amount_in, min_out)
        VALUES ($1, $2, $3, 'submitting', $4, $5, $6)
-       ON CONFLICT (plan_id, week_id, slot) WHERE status IN ('submitting', 'ambiguous', 'bought') DO NOTHING
+       ON CONFLICT (plan_id, period_id, slot) WHERE status IN ('submitting', 'ambiguous', 'bought') DO NOTHING
        RETURNING ${ATTEMPT_COLS}`,
-      [a.planId, a.weekId, a.slot, a.startedAt, a.amountIn.toString(), a.minOut.toString()],
+      [a.planId, a.periodId, a.slot, a.startedAt, a.amountIn.toString(), a.minOut.toString()],
     );
     return r.rows[0] ? attemptFromRow(r.rows[0]) : null;
   }
@@ -235,10 +297,10 @@ export class PgStorage implements Storage {
     return r.rows.map(attemptFromRow);
   }
 
-  async countAttempts(planId: string, weekId: string, slot: AttemptSlot, status: AttemptStatus): Promise<number> {
+  async countAttempts(planId: string, periodId: string, slot: AttemptSlot, status: AttemptStatus): Promise<number> {
     const r = await this.pool.query<{ n: string }>(
-      "SELECT count(*) AS n FROM purchase_attempts WHERE plan_id = $1 AND week_id = $2 AND slot = $3 AND status = $4",
-      [planId, weekId, slot, status],
+      "SELECT count(*) AS n FROM purchase_attempts WHERE plan_id = $1 AND period_id = $2 AND slot = $3 AND status = $4",
+      [planId, periodId, slot, status],
     );
     return Number(r.rows[0]!.n);
   }
@@ -253,32 +315,35 @@ export class PgStorage implements Storage {
 
   async appendRunLog(e: RunLogEntry): Promise<void> {
     await this.pool.query(
-      `INSERT INTO run_log (plan_id, week_id, at, outcome, reason, tx_hash, amount_in, out_amount)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [e.planId, e.weekId, e.at, e.outcome, e.reason, e.txHash?.toLowerCase() ?? null, e.amountIn?.toString() ?? null, e.out?.toString() ?? null],
+      `INSERT INTO run_log (plan_id, period_id, at, outcome, reason, tx_hash, amount_in, out_amount, kind)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        e.planId,
+        e.periodId,
+        e.at,
+        e.outcome,
+        e.reason,
+        e.txHash?.toLowerCase() ?? null,
+        e.amountIn?.toString() ?? null,
+        e.out?.toString() ?? null,
+        e.kind ?? null,
+      ],
     );
   }
 
   async lastRunLog(planId: string): Promise<RunLogEntry | null> {
-    const r = await this.pool.query<{
-      plan_id: string; week_id: string; at: string; outcome: RunLogEntry["outcome"]; reason: string;
-      tx_hash: string | null; amount_in: string | null; out_amount: string | null;
-    }>(
-      `SELECT plan_id, to_char(week_id, 'YYYY-MM-DD') AS week_id, at, outcome, reason, tx_hash, amount_in, out_amount
-       FROM run_log WHERE plan_id = $1 ORDER BY id DESC LIMIT 1`,
-      [planId],
+    const r = await this.pool.query<RunLogRow>(`SELECT ${RUN_LOG_COLS} FROM run_log WHERE plan_id = $1 ORDER BY id DESC LIMIT 1`, [planId]);
+    return r.rows[0] ? runLogFromRow(r.rows[0]) : null;
+  }
+
+  async listRunLog(planIds: readonly string[], limit: number): Promise<RunLogEntry[]> {
+    if (planIds.length === 0) return [];
+    const r = await this.pool.query<RunLogRow>(
+      `SELECT ${RUN_LOG_COLS} FROM run_log WHERE plan_id = ANY($1::uuid[]) ORDER BY id DESC LIMIT $2`,
+      [planIds, limit],
     );
-    const x = r.rows[0];
-    if (!x) return null;
-    return {
-      planId: x.plan_id,
-      weekId: x.week_id,
-      at: Number(x.at),
-      outcome: x.outcome,
-      reason: x.reason,
-      ...(x.tx_hash ? { txHash: x.tx_hash as Hex } : {}),
-      ...(x.amount_in !== null ? { amountIn: BigInt(x.amount_in) } : {}),
-      ...(x.out_amount !== null ? { out: BigInt(x.out_amount) } : {}),
-    };
+    return r.rows.map(runLogFromRow);
   }
 }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

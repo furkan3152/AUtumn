@@ -1,4 +1,4 @@
-import { parseAbi } from "viem";
+import { parseAbi, parseAbiItem } from "viem";
 
 export const erc20Abi = parseAbi([
   "function approve(address spender, uint256 amount) returns (bool)",
@@ -43,7 +43,19 @@ export const altanaAccountAbi = parseAbi([
 /** Altana KeyStore: `isValidKey` is registered, unexpired and unrevoked. */
 export const altanaKeyStoreAbi = parseAbi([
   "function isValidKey(address user, bytes32 keyId) view returns (bool)",
+  "function getKeys(address user) view returns (bytes32[])",
 ]);
+
+/** KeyStore `KeyRegistered`, emitted by the KeyStore itself (from @altananetwork/sdk internal/keystore). */
+export const keyRegisteredEvent = parseAbiItem(
+  "event KeyRegistered(address indexed user, bytes32 indexed keyId, address indexed validator, uint40 expiry, bool isRoot)",
+);
+
+/** Altana KeyStoreController: the registration fee, paid in CELO, per key. */
+export const altanaKeyStoreControllerAbi = parseAbi(["function getRegistrationFeeInWei() view returns (uint256)"]);
+
+/** ERC-8004 identity registry is an ERC-721. */
+export const erc721BalanceAbi = parseAbi(["function balanceOf(address owner) view returns (uint256)"]);
 
 export const SPEND_PERIOD = {
   minute: 0,

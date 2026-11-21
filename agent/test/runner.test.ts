@@ -13,7 +13,7 @@ const WALLET = getAddress("0x2222222222222222222222222222222222222222") as Addre
 const WED_NOON = Math.floor(Date.parse("2026-11-18T12:00:00Z") / 1000);
 const AMOUNT = 5_000_000n;
 
-async function setup(opts: { dipBuy?: boolean; dayOfWeek?: number; hourUtc?: number; now?: number } = {}) {
+async function setup(opts: { dipBuy?: boolean; dayOfWeek?: number; hourUtc?: number; now?: number; period?: "day" | "week" } = {}) {
   const now = opts.now ?? WED_NOON;
   const storage = new MemoryStorage();
   const chain = new FakeChain(now);
@@ -21,9 +21,11 @@ async function setup(opts: { dipBuy?: boolean; dayOfWeek?: number; hourUtc?: num
   const encryptionKey = randomBytes(32);
   const { plan, sessionPublicKey, grant } = await createPlan(
     { storage, encryptionKey, goldBuyer: GOLD_BUYER, now },
-    { walletAddress: WALLET, amountPerWeek: AMOUNT, expiresAt: now + 60 * 86_400, dayOfWeek: opts.dayOfWeek ?? 1, hourUtc: opts.hourUtc ?? 9, dipBuy: !!opts.dipBuy },
+    { walletAddress: WALLET, amountPerBuy: AMOUNT, period: opts.period ?? "week", expiresAt: now + 60 * 86_400, dayOfWeek: opts.dayOfWeek ?? 1, hourUtc: opts.hourUtc ?? 9, dipBuy: !!opts.dipBuy },
   );
-  chain.cap = grant.weeklyCap;
+  chain.cap = grant.periodCap;
+  chain.period = grant.period;
+  chain.expiry = grant.expiry;
   // The browser's grant, as the SDK serializes it.
   await storage.activatePlan(plan.id, {
     walletAddress: WALLET,
@@ -111,7 +113,7 @@ describe("runner", () => {
     expect(await only(runner)).toMatchObject({ decision: "bought" });
   });
 
-  it("skips when the remaining weekly cap cannot cover amount plus fee allowance", async () => {
+  it("skips when the remaining weekly cap cannot cover the amount plus send headroom", async () => {
     const { runner, executor, chain } = await setup();
     chain.spent = 100_000n; // e.g. an earlier fee drew on the cap
     expect(await only(runner)).toMatchObject({ decision: "skipped", reason: expect.stringMatching(/weekly cap/) });
@@ -184,7 +186,7 @@ describe("runner", () => {
 
   it("a crash between claim and send is treated as unknown, not as not-bought", async () => {
     const { runner, executor, storage, chain, plan } = await setup();
-    await storage.claimAttempt({ planId: plan.id, weekId: "2026-11-16", slot: "weekly", startedAt: chain.now - 10, amountIn: AMOUNT, minOut: 1n });
+    await storage.claimAttempt({ planId: plan.id, periodId: "2026-11-16", slot: "weekly", startedAt: chain.now - 10, amountIn: AMOUNT, minOut: 1n });
     expect(await only(runner)).toMatchObject({ decision: "waiting_on_earlier_attempt" });
     expect(executor.calls).toHaveLength(0);
   });
@@ -194,7 +196,7 @@ describe("runner", () => {
     executor.behaviour = async () => {
       throw new AltanaError({ code: "spend_limit_exceeded", statement: "s", action: "a" });
     };
-    expect(await only(runner)).toMatchObject({ decision: "failed", reason: expect.stringMatching(/weekly limit/) });
+    expect(await only(runner)).toMatchObject({ decision: "failed", kind: "cap_exceeded", reason: expect.stringMatching(/limit you set/) });
     expect(storage.attempts[0]?.status).toBe("not_bought");
     expect((await storage.getPlan(plan.id))?.status).toBe("active");
   });
@@ -220,7 +222,7 @@ describe("runner", () => {
       expect(await only(runner)).toMatchObject({ decision: "failed" });
       chain.now += 600;
     }
-    expect(await only(runner)).toMatchObject({ decision: "skipped", reason: expect.stringMatching(/3 attempts failed/) });
+    expect(await only(runner)).toMatchObject({ decision: "skipped", kind: "too_many_failures", reason: expect.stringMatching(/3 attempts failed/) });
     expect(executor.calls).toHaveLength(3);
   });
 
@@ -231,12 +233,18 @@ describe("runner", () => {
     chain.allowedCalls = chain.allowedCalls.slice(0, 2);
     chain.cap = 99_000_000n;
     expect(await only(runner)).toMatchObject({ decision: "skipped", reason: expect.stringMatching(/weekly cap differs/) });
+    chain.cap = 5_050_000n;
+    chain.period = "day";
+    expect(await only(runner)).toMatchObject({ decision: "skipped", reason: expect.stringMatching(/spend period differs/) });
+    chain.period = "week";
+    chain.expiry += 1;
+    expect(await only(runner)).toMatchObject({ decision: "skipped", reason: expect.stringMatching(/expiry differs/) });
     expect(executor.calls).toHaveLength(0);
   });
 
   it("dip rule: buys once more in the week only at ≥2% below the last purchase price, inside the cap", async () => {
     const { runner, executor, chain, grant } = await setup({ dipBuy: true });
-    expect(grant.weeklyCap).toBe(2n * (AMOUNT + 50_000n));
+    expect(grant.periodCap).toBe(2n * (AMOUNT + 50_000n));
     expect(await only(runner)).toMatchObject({ decision: "bought", slot: "weekly" });
     chain.now += 3600;
     chain.quoteOut = 1_414n; // ~1% cheaper
@@ -265,12 +273,12 @@ describe("runner", () => {
     const s = await setup();
     const other = await createPlan(
       { storage: s.storage, encryptionKey: s.encryptionKey, goldBuyer: GOLD_BUYER, now: s.chain.now },
-      { walletAddress: getAddress("0x3333333333333333333333333333333333333333"), amountPerWeek: AMOUNT, expiresAt: s.chain.now + 86_400 * 30, dayOfWeek: 0, hourUtc: 0 },
+      { walletAddress: getAddress("0x3333333333333333333333333333333333333333"), amountPerBuy: AMOUNT, expiresAt: s.chain.now + 86_400 * 30, dayOfWeek: 0, hourUtc: 0 },
     );
-    const g = planToSessionGrant({ amountPerWeek: AMOUNT, expiresAt: s.chain.now + 86_400 * 30 }, GOLD_BUYER, s.chain.now);
+    const g = planToSessionGrant({ amountPerBuy: AMOUNT, expiresAt: s.chain.now + 86_400 * 30 }, GOLD_BUYER, s.chain.now);
     await s.storage.activatePlan(other.plan.id, {
       walletAddress: getAddress("0x3333333333333333333333333333333333333333"), publicKey: other.sessionPublicKey,
-      permissions: { calls: g.permissions.calls, spend: [{ limit: g.weeklyCap.toString(), period: "week", token: g.feeToken }] }, expiry: g.expiry,
+      permissions: { calls: g.permissions.calls, spend: [{ limit: g.periodCap.toString(), period: "week", token: g.feeToken }] }, expiry: g.expiry,
     });
     const orig = s.chain.sessionState.bind(s.chain);
     s.chain.sessionState = async (w, pk) => {
@@ -279,5 +287,84 @@ describe("runner", () => {
     };
     const report = await s.runner.tick();
     expect(report.plans.map((p) => p.decision).sort()).toEqual(["bought", "error"]);
+  });
+
+  it("daily plan: buys once per UTC day, never twice in the same day, again after 00:00 UTC", async () => {
+    const { runner, executor, chain, grant } = await setup({ period: "day", hourUtc: 9 });
+    expect(grant.permissions.spend[0]).toMatchObject({ period: "day", limit: AMOUNT + 50_000n });
+    expect(await only(runner)).toMatchObject({ decision: "bought" });
+    chain.now += 3600; // 13:00 the same day
+    expect(await only(runner)).toMatchObject({ decision: "already_bought" });
+    chain.now = Math.floor(Date.parse("2026-11-18T23:59:59Z") / 1000);
+    expect(await only(runner)).toMatchObject({ decision: "already_bought" });
+    expect(executor.calls).toHaveLength(1);
+
+    chain.now = Math.floor(Date.parse("2026-11-19T00:00:00Z") / 1000); // new day, before 09:00
+    chain.spent = 0n;
+    expect(await only(runner)).toMatchObject({ decision: "not_due" });
+    chain.now = Math.floor(Date.parse("2026-11-19T09:00:00Z") / 1000);
+    expect(await only(runner)).toMatchObject({ decision: "bought" });
+    expect(executor.calls).toHaveLength(2);
+  });
+
+  it("daily plan: two concurrent ticks in the same day send once", async () => {
+    const { storage, chain, executor, encryptionKey } = await setup({ period: "day" });
+    executor.delayMs = 20;
+    const mk = () => createRunner({ storage, chain, executor, encryptionKey, goldBuyer: GOLD_BUYER, recheckAttempts: 1, recheckDelayMs: 0, sleep: async () => {} });
+    const [a, b] = await Promise.all([mk().tick(), mk().tick()]);
+    expect([a.plans[0]!.decision, b.plans[0]!.decision].sort()).toEqual(["bought", "waiting_on_earlier_attempt"]);
+    expect(executor.calls).toHaveLength(1);
+  });
+
+  it("pool without a 30-minute price history: skips plainly, then buys later in the same period", async () => {
+    const { runner, executor, storage, chain } = await setup();
+    chain.quoteTwap = false;
+    expect(await only(runner)).toMatchObject({ decision: "skipped", kind: "twap_unavailable", reason: "Price check not available right now, the agent will retry." });
+    chain.now += 600;
+    expect(await only(runner)).toMatchObject({ decision: "skipped", kind: "twap_unavailable" });
+    expect(storage.runLog.filter((e) => e.kind === "twap_unavailable")).toHaveLength(1); // logged once per period
+    expect(executor.calls).toHaveLength(0);
+    chain.quoteTwap = true;
+    chain.now += 1800;
+    expect(await only(runner)).toMatchObject({ decision: "bought" });
+  });
+
+  it("an OLD refusal from the relay's simulation is deferred, not a failure, and is retried in the period", async () => {
+    const { runner, executor, storage } = await setup();
+    let n = 0;
+    executor.behaviour = async () => {
+      n++;
+      throw new AltanaError({ code: "unknown", statement: "s", action: "a", relayMessage: "execution reverted: OLD" });
+    };
+    for (let i = 0; i < 4; i++) expect(await only(runner)).toMatchObject({ decision: "skipped", kind: "twap_unavailable" });
+    expect(n).toBe(4); // never hits the 3-failure limit
+    expect(storage.attempts.every((a) => a.status === "deferred")).toBe(true);
+    executor.behaviour = "confirm";
+    expect(await only(runner)).toMatchObject({ decision: "bought" });
+  });
+
+  it("a reverted transaction's fee does not block the rest of the period", async () => {
+    const { runner, executor, chain } = await setup();
+    executor.behaviour = async () => {
+      chain.spent += 5_000n; // the relay fee of a transaction that reverted onchain
+      return { callsId: "0x01", transactionHash: `0x${"ab".repeat(32)}`, status: "FAILED", statusCode: 500 };
+    };
+    expect(await only(runner)).toMatchObject({ decision: "failed", kind: "reverted" });
+    executor.behaviour = "confirm";
+    chain.now += 600;
+    expect(await only(runner)).toMatchObject({ decision: "bought" });
+  });
+
+  it("dip rule on a daily plan doubles the daily cap and buys at most twice a day", async () => {
+    const { runner, executor, chain, grant } = await setup({ period: "day", dipBuy: true });
+    expect(grant.periodCap).toBe(2n * (AMOUNT + 50_000n));
+    expect(await only(runner)).toMatchObject({ decision: "bought", slot: "weekly" });
+    chain.quoteOut = 1_430n;
+    chain.now += 60;
+    expect(await only(runner)).toMatchObject({ decision: "bought", slot: "dip" });
+    chain.quoteOut = 1_600n;
+    chain.now += 60;
+    expect(await only(runner)).toMatchObject({ decision: "already_bought" });
+    expect(executor.calls).toHaveLength(2);
   });
 });

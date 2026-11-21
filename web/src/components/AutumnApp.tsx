@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { isFunded, type GramClient, type GramState } from "@/lib/gram";
-import { useGram } from "@/lib/useGram";
+import { isFunded, type AutumnClient, type AutumnState } from "@/lib/autumn";
+import { useAutumn } from "@/lib/useAutumn";
 import { Logo } from "./Logo";
 import { Button, Panel, Spinner } from "./ui";
 import { Landing } from "./screens/Landing";
@@ -12,8 +12,8 @@ import { Home } from "./screens/Home";
 
 type View = "auto" | "deposit" | "plan";
 
-export function GramApp() {
-  const load = useGram();
+export function AutumnApp() {
+  const load = useAutumn();
   const isPreview = load.isPreview;
 
   return (
@@ -28,7 +28,7 @@ export function GramApp() {
       <Header />
       <main className="main" id="main">
         {load.status === "loading" && <Loading />}
-        {load.status === "unconnected" && <Landing connected={false} />}
+        {load.status === "unconnected" && <Landing connected={false} price={null} />}
         {load.status === "error" && <LoadError message={load.message} retry={load.retry} />}
         {load.status === "ready" && <Ready client={load.client} state={load.state} />}
       </main>
@@ -52,20 +52,56 @@ function Header() {
   );
 }
 
-function Ready({ client, state }: { client: GramClient; state: GramState }) {
+function Ready({ client, state }: { client: AutumnClient; state: AutumnState }) {
   const [view, setView] = useState<View>("auto");
   const back = () => setView("auto");
 
-  if (!state.wallet) return <Landing connected client={client} />;
+  if (!state.wallet) return <Landing connected client={client} price={state.price} notices={state.notices} />;
 
   const hasPlan = state.plan !== null;
 
+  return (
+    <>
+      <Notices notices={state.notices} />
+      <Screen client={client} state={state} view={view} setView={setView} back={back} hasPlan={hasPlan} />
+    </>
+  );
+}
+
+function Screen({
+  client,
+  state,
+  view,
+  setView,
+  back,
+  hasPlan,
+}: {
+  client: AutumnClient;
+  state: AutumnState;
+  view: View;
+  setView: (v: View) => void;
+  back: () => void;
+  hasPlan: boolean;
+}) {
   if (view === "deposit") return <Deposit state={state} onBack={back} />;
   if (view === "plan" && isFunded(state)) return <PlanPicker client={client} state={state} onDone={back} onBack={back} />;
   if (view === "plan") return <Deposit state={state} onContinue={() => setView("plan")} onBack={back} />;
   if (!hasPlan) return <Deposit state={state} onContinue={() => setView("plan")} />;
 
   return <Home client={client} state={state} onAddMoney={() => setView("deposit")} onNewPlan={() => setView("plan")} />;
+}
+
+export function Notices({ notices }: { notices: string[] }) {
+  if (notices.length === 0) return null;
+  return (
+    <div className="notices narrow" role="status">
+      {notices.map((n) => (
+        <p key={n} className="muted small">
+          {n}
+        </p>
+      ))}
+    </div>
+  );
 }
 
 function Loading() {

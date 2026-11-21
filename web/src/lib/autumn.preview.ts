@@ -1,6 +1,6 @@
 /**
- * In-memory preview implementation of GramClient.
- * Loaded only when NEXT_PUBLIC_GRAM_PREVIEW=1. Nothing here touches a chain.
+ * In-memory preview implementation of AutumnClient.
+ * Loaded only when NEXT_PUBLIC_AUTUMN_PREVIEW=1. Nothing here touches a chain.
  *
  * Optional URL parameter `?preview=<scenario>` picks a starting point:
  *   fresh (default) | funded | active | empty | stopped | error | loading
@@ -9,16 +9,16 @@ import {
   DECIMALS,
   WEEK_MS,
   draftLimits,
-  nextWeekResetUtc,
+  nextResetUtc,
   type ActivityItem,
   type Address,
-  type GramClient,
-  type GramState,
+  type AutumnClient,
+  type AutumnState,
   type Plan,
   type PlanInput,
   type TxHash,
   type Wallet,
-} from "./gram";
+} from "./autumn";
 
 const USDT = 10n ** BigInt(DECIMALS.USDT);
 const CELO = 10n ** BigInt(DECIMALS.CELO);
@@ -46,56 +46,62 @@ function goldFor(spent: bigint, usdtPerOunce: bigint) {
   return (spent * OUNCE) / usdtPerOunce;
 }
 
-function emptyState(): GramState {
+function emptyState(): AutumnState {
   return {
     wallet: null,
     balances: null,
     registration: null,
-    price: { usdtPerOunce: 4126_400000n, observedAt: new Date() },
+    price: { usdtPerOunce: 4126_400000n, observedAt: new Date(), priceCheckAvailable: true },
     plan: null,
     agent: { kind: "none" },
     activity: [],
+    identity: null,
+    notices: [],
   };
 }
 
-function makePlan(input: PlanInput, startedAt: Date, nextPurchaseAt: Date | null): Plan {
+function makePlan(input: Omit<PlanInput, "expiresAt">, startedAt: Date, nextPurchaseAt: Date | null): Plan {
   const d = draftLimits(input, startedAt);
-  const weekEndsAt = nextWeekResetUtc(new Date());
   return {
-    ...input,
+    amount: input.amount,
+    period: input.period,
+    buyTheDip: input.buyTheDip,
     startedAt,
     nextPurchaseAt,
     txHash: fakeHash(),
     limits: {
-      weeklyCap: d.weeklyCap,
-      spentThisWeek: 0n,
-      weekEndsAt,
+      period: input.period,
+      cap: d.cap,
+      spent: 0n,
+      resetsAt: nextResetUtc(new Date(), input.period),
       allowedAsset: { symbol: "XAUt0", address: PREVIEW_GOLD },
       expiresAt: d.expiresAt,
+      observedAt: new Date(),
     },
   };
 }
 
-function scenario(name: string): GramState {
+function scenario(name: string): AutumnState {
   const s = emptyState();
   if (name === "fresh" || name === "error" || name === "loading") return s;
   const now = Date.now();
   s.wallet = { address: PREVIEW_ADDRESS, createdAt: new Date(now - 40 * DAY) };
-  s.registration = { paid: false, feeCelo: FEE };
+  s.registration = { walletRegistered: false, nextGrantFeeCelo: FEE };
   s.balances = { usdt: 50n * USDT, gold: 0n, celo: 20n * CELO + CELO / 2n, observedAt: new Date() };
   if (name === "funded") return s;
 
   const weekly = 5n * USDT;
   const start = name === "empty" ? new Date(now - 60_000) : new Date(now - 4 * WEEK_MS + 6000);
-  s.registration = { paid: true, feeCelo: FEE, txHash: fakeHash() };
+  s.registration = { walletRegistered: true, nextGrantFeeCelo: FEE / 2n };
+  const regTx = fakeHash();
   s.balances.celo = CELO / 2n;
   const firstNext = name === "empty" ? new Date(start.getTime() + WEEK_MS) : new Date(now + 6000);
-  const plan = makePlan({ weeklyAmount: weekly, buyTheDip: true }, start, firstNext);
+  const plan = makePlan({ amount: weekly, period: "week", buyTheDip: true }, start, firstNext);
   s.plan = plan;
   s.agent = { kind: "active" };
   const items: ActivityItem[] = [
-    { kind: "registration", id: "reg", at: new Date(start.getTime() - 120_000), feeCelo: FEE, txHash: s.registration.txHash! },
-    { kind: "plan-started", id: "plan", at: start, weeklyAmount: weekly, txHash: plan.txHash },
+    { kind: "registration", id: "reg", at: new Date(start.getTime() - 120_000), txHash: regTx },
+    { kind: "plan-started", id: "plan", at: start, amount: weekly, period: "week", txHash: plan.txHash },
   ];
 
   if (name !== "empty") {
@@ -108,15 +114,16 @@ function scenario(name: string): GramState {
       const got = goldFor(weekly, p);
       gold += got;
       spent += weekly;
-      items.push({ kind: "purchase", id: `p${w}`, at, spent: weekly, received: got, usdtPerOunce: p, trigger: "weekly", txHash: fakeHash() });
+      items.push({ kind: "purchase", id: `p${w}`, at, spent: weekly, received: got, usdtPerOunce: p, trigger: "scheduled", period: "week", txHash: fakeHash() });
       if (w === 2) {
         const dipAt = new Date(at.getTime() + 2 * DAY);
         const dp = 3898_200000n;
         const dgot = goldFor(weekly, dp);
         gold += dgot;
         spent += weekly;
-        items.push({ kind: "purchase", id: "dip2", at: dipAt, spent: weekly, received: dgot, usdtPerOunce: dp, trigger: "dip", txHash: fakeHash() });
-        items.push({ kind: "refused", id: "ref2", at: new Date(dipAt.getTime() + DAY), attempted: weekly, reason: "weekly-cap", txHash: fakeHash() });
+        items.push({ kind: "purchase", id: "dip2", at: dipAt, spent: weekly, received: dgot, usdtPerOunce: dp, trigger: "dip", period: "week", txHash: fakeHash() });
+        items.push({ kind: "refused", id: "ref2", at: new Date(dipAt.getTime() + DAY), attempted: weekly, reason: "cap" });
+        items.push({ kind: "skipped", id: "skip2", at: new Date(dipAt.getTime() + DAY / 2), text: "Price check not available right now, the agent will retry.", retries: true });
       }
     }
     s.balances.gold = gold;
@@ -134,7 +141,7 @@ function scenario(name: string): GramState {
   return s;
 }
 
-export function createPreviewClient(): GramClient {
+export function createPreviewClient(): AutumnClient {
   const params = typeof window === "undefined" ? null : new URLSearchParams(window.location.search);
   const name = params?.get("preview") ?? "fresh";
   let state = scenario(name);
@@ -160,18 +167,18 @@ export function createPreviewClient(): GramClient {
       if (state.agent.kind !== "active" || !state.plan || !state.balances || !state.price) return;
       const p = state.plan;
       const price = state.price.usdtPerOunce;
-      const got = goldFor(p.weeklyAmount, price);
+      const got = goldFor(p.amount, price);
       const at = new Date();
       state = {
         ...state,
-        balances: { ...state.balances, usdt: state.balances.usdt - p.weeklyAmount, gold: state.balances.gold + got, observedAt: at },
+        balances: { ...state.balances, usdt: state.balances.usdt - p.amount, gold: state.balances.gold + got, observedAt: at },
         plan: {
           ...p,
-          nextPurchaseAt: new Date(at.getTime() + WEEK_MS),
-          limits: { ...p.limits, spentThisWeek: p.limits.spentThisWeek + p.weeklyAmount, weekEndsAt: nextWeekResetUtc(at) },
+          nextPurchaseAt: new Date(at.getTime() + (p.period === "day" ? DAY : WEEK_MS)),
+          limits: { ...p.limits, spent: (p.limits.spent ?? 0n) + p.amount, resetsAt: nextResetUtc(at, p.period), observedAt: at },
         },
         activity: [
-          { kind: "purchase", id: `live${at.getTime()}`, at, spent: p.weeklyAmount, received: got, usdtPerOunce: price, trigger: "weekly", txHash: fakeHash() },
+          { kind: "purchase", id: `live${at.getTime()}`, at, spent: p.amount, received: got, usdtPerOunce: price, trigger: "scheduled", period: p.period, txHash: fakeHash() },
           ...state.activity,
         ],
       };
@@ -206,7 +213,7 @@ export function createPreviewClient(): GramClient {
       state = {
         ...state,
         wallet,
-        registration: { paid: false, feeCelo: FEE },
+        registration: { walletRegistered: false, nextGrantFeeCelo: FEE },
         balances: { usdt: 0n, gold: 0n, celo: 0n, observedAt: new Date() },
       };
       emit();
@@ -218,22 +225,28 @@ export function createPreviewClient(): GramClient {
       });
       return wallet;
     },
+    async restoreWallet() {
+      await wait(900);
+      throw new Error("No Autumn passkey was found on this device (preview).");
+    },
     async confirmPlan(input) {
       await wait(1500);
       const now = new Date();
       const plan = makePlan(input, now, new Date(now.getTime() + 5000));
       const regTx = fakeHash();
       const balances = state.balances!;
-      const paidFee = !state.registration?.paid;
+      const firstGrant = !state.registration?.walletRegistered;
+      const fee = state.registration?.nextGrantFeeCelo ?? FEE;
       state = {
         ...state,
         plan,
         agent: { kind: "active" },
-        registration: { paid: true, feeCelo: FEE, txHash: state.registration?.txHash ?? regTx },
-        balances: { ...balances, celo: paidFee ? balances.celo - FEE : balances.celo, observedAt: now },
+        registration: { walletRegistered: true, nextGrantFeeCelo: FEE / 2n },
+        balances: { ...balances, celo: balances.celo - fee, observedAt: now },
+        identity: { registered: true },
         activity: [
-          { kind: "plan-started", id: `plan${now.getTime()}`, at: now, weeklyAmount: input.weeklyAmount, txHash: plan.txHash },
-          ...(paidFee ? [{ kind: "registration" as const, id: `reg${now.getTime()}`, at: new Date(now.getTime() - 1), feeCelo: FEE, txHash: regTx }] : []),
+          { kind: "plan-started", id: `plan${now.getTime()}`, at: now, amount: input.amount, period: input.period, txHash: plan.txHash },
+          ...(firstGrant ? [{ kind: "registration" as const, id: `reg${now.getTime()}`, at: new Date(now.getTime() - 1), txHash: regTx }] : []),
           ...state.activity,
         ],
       };

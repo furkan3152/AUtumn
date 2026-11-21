@@ -16,6 +16,7 @@ export type FailureKind =
   | "session_ended"
   | "insufficient_balance"
   | "quote_expired"
+  | "twap_unavailable"
   | "relay_failure"
   | "unknown";
 
@@ -31,11 +32,12 @@ export type ExplainedFailure = {
 };
 
 const MESSAGES: Record<FailureKind, string> = {
-  cap_exceeded: "This purchase would go over the weekly limit you set, so it was not made.",
+  cap_exceeded: "This purchase would go over the limit you set, so it was not made.",
   call_not_permitted: "The agent's key is not allowed to make this call, so nothing was sent.",
   session_ended: "The agent's key has been revoked or has expired. Set up a new plan to continue.",
   insufficient_balance: "The wallet does not hold enough USD₮ for this purchase and its fee.",
   quote_expired: "The relay's fee quote expired before sending. The next run will try again.",
+  twap_unavailable: "Price check not available right now, the agent will retry.",
   relay_failure: "The Altana relay could not be reached or did not answer. Autumn will check the chain before trying again.",
   unknown: "The purchase did not complete for a reason Autumn did not recognise. Autumn will check the chain before trying again.",
 };
@@ -93,6 +95,12 @@ export function explainAltanaError(err: unknown): ExplainedFailure {
     case "prices_stale":
       // Refused while preparing: nothing was signed and sent.
       return make("relay_failure", "no", code);
+  }
+
+  // The pool's oracle has under 30 minutes of history (Uniswap V3 reverts "OLD"):
+  // GoldBuyer refuses to price the buy. Refused in simulation, nothing sent.
+  if (/\bOLD\b/.test(text)) {
+    return make("twap_unavailable", "no", code);
   }
 
   // Revert names the relay reports from its simulation (before inclusion).

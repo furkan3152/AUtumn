@@ -1,19 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { loadGramClient, type GramClient, type GramState } from "./gram";
+import { loadAutumnClient, type AutumnClient, type AutumnState } from "./autumn";
 
-export type GramLoad =
+export type AutumnLoad =
   | { status: "loading" }
   | { status: "unconnected" }
   | { status: "error"; message: string; retry: () => void }
-  | { status: "ready"; client: GramClient; state: GramState };
+  | { status: "ready"; client: AutumnClient; state: AutumnState };
 
 /** Current load state, plus whether the active client is the preview (known before its data loads). */
-export function useGram(): GramLoad & { isPreview: boolean } {
-  const [load, setLoad] = useState<GramLoad>({ status: "loading" });
+export function useAutumn(): AutumnLoad & { isPreview: boolean } {
+  const [load, setLoad] = useState<AutumnLoad>({ status: "loading" });
   const [isPreview, setIsPreview] = useState(false);
-  const clientRef = useRef<GramClient | null>(null);
+  const clientRef = useRef<AutumnClient | null>(null);
   const [attempt, setAttempt] = useState(0);
   const retry = useCallback(() => {
     setLoad({ status: "loading" });
@@ -26,7 +26,7 @@ export function useGram(): GramLoad & { isPreview: boolean } {
 
     (async () => {
       try {
-        const client = clientRef.current ?? (await loadGramClient());
+        const client = clientRef.current ?? (await loadAutumnClient());
         if (!alive) return;
         if (!client) {
           setLoad({ status: "unconnected" });

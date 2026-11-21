@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { PLAN_DURATION_WEEKS, type ActivityItem, type GramClient, type GramState, type RefusalReason } from "@/lib/gram";
+import { periodsInPlan, type ActivityItem, type AutumnClient, type AutumnState, type RefusalReason } from "@/lib/autumn";
 import {
   celo,
   formatDate,
@@ -13,7 +13,7 @@ import {
   shortAddress,
   usdt,
 } from "@/lib/format";
-import { errorText } from "@/lib/useGram";
+import { errorText } from "@/lib/useAutumn";
 import { Scene, type SceneMode } from "../Scene";
 import { P, Sprite } from "../pixel";
 import { Button, CopyButton, Panel, Spinner, TxLink } from "../ui";
@@ -33,8 +33,8 @@ export function Home({
   onAddMoney,
   onNewPlan,
 }: {
-  client: GramClient;
-  state: GramState;
+  client: AutumnClient;
+  state: AutumnState;
   onAddMoney: () => void;
   onNewPlan: () => void;
 }) {
@@ -47,10 +47,13 @@ export function Home({
 
   const purchases = state.activity.filter((a): a is Extract<ActivityItem, { kind: "purchase" }> => a.kind === "purchase");
   const spentTotal = purchases.reduce((s, p) => s + p.spent, 0n);
-  const budget = plan.weeklyAmount * BigInt(PLAN_DURATION_WEEKS);
-  const chestFill = budget > 0n ? Number((spentTotal * 1000n) / budget) / 1000 : 0;
-  const limitUsed = lim.weeklyCap > 0n ? Number((lim.spentThisWeek * 1000n) / lim.weeklyCap) / 1000 : 0;
-  const left = lim.weeklyCap > lim.spentThisWeek ? lim.weeklyCap - lim.spentThisWeek : 0n;
+  const budget = plan.amount * BigInt(periodsInPlan(plan.period));
+  const chestFill = budget > 0n ? Math.min(1, Number((spentTotal * 1000n) / budget) / 1000) : 0;
+  const spent = lim.spent ?? 0n;
+  const limitUsed = lim.cap > 0n && lim.spent !== null ? Number((spent * 1000n) / lim.cap) / 1000 : 0;
+  const left = lim.cap > spent ? lim.cap - spent : 0n;
+  const daily = plan.period === "day";
+  const periodWord = daily ? "day" : "week";
 
   const running = agent.kind === "active" || agent.kind === "stopping";
   const mode: SceneMode =
@@ -63,7 +66,7 @@ export function Home({
         ? "Picture: the helper is resting. A sign says the plan has ended."
         : "Picture: the helper stands by the chest, ready to walk to the gold stall.",
     gold > 0n ? `The chest holds ${formatGrams(gold)} grams of gold.` : "The chest is empty.",
-    `The fence shows this week's limit: ${Math.round(limitUsed * 100)}% used.`,
+    `The fence shows this ${periodWord}'s limit: ${Math.round(limitUsed * 100)}% used.`,
   ].join(" ");
 
   return (
@@ -82,7 +85,7 @@ export function Home({
             <span className="key key--chest" aria-hidden="true" /> Chest: gold you hold
           </span>
           <span className="key-item">
-            <span className="key key--fence" aria-hidden="true" /> Fence: this week&apos;s limit, gold posts are used
+            <span className="key key--fence" aria-hidden="true" /> Fence: this {periodWord}&apos;s limit, gold posts are used
           </span>
         </p>
       </div>
@@ -91,9 +94,15 @@ export function Home({
         <Panel tone="stopped" title={agent.kind === "stopped" ? "Agent stopped" : "Plan ended"} className="home__status">
           {agent.kind === "stopped" ? (
             <p>
-              You stopped the agent {relative(agent.stoppedAt, now)} (
-              <span className="num">{formatDateTime(agent.stoppedAt)}</span>). It can no longer buy
-              anything. <TxLink hash={agent.txHash}>See the revoke on Celoscan</TxLink>
+              {agent.stoppedAt ? (
+                <>
+                  The agent was stopped {relative(agent.stoppedAt, now)} (<span className="num">{formatDateTime(agent.stoppedAt)}</span>).
+                </>
+              ) : (
+                <>The agent&apos;s key is revoked onchain.</>
+              )}{" "}
+              It can no longer buy anything.{" "}
+              {agent.txHash ? <TxLink hash={agent.txHash}>See the revoke on Celoscan</TxLink> : null}
             </p>
           ) : (
             <p>The plan reached its end date on {formatDate(agent.expiredAt)}. The agent can no longer buy anything.</p>
@@ -136,7 +145,7 @@ export function Home({
             )}
           </Panel>
 
-          <Panel title={running ? "This week's limit" : "Limits of the last plan"}>
+          <Panel title={running ? `This ${periodWord}'s limit` : "Limits of the last plan"}>
             {!running && <p className="muted">No longer in force. The agent cannot spend anything.</p>}
             <div
               className="meter"
@@ -144,7 +153,7 @@ export function Home({
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={Math.round(limitUsed * 100)}
-              aria-label="Weekly limit used"
+              aria-label={`${daily ? "Daily" : "Weekly"} limit used`}
             >
               <span style={{ width: `${Math.min(100, limitUsed * 100)}%` }} />
             </div>
@@ -152,17 +161,18 @@ export function Home({
               <div>
                 <dt>Used</dt>
                 <dd className="num">
-                  {usdt(lim.spentThisWeek)} of {usdt(lim.weeklyCap)} USD₮
+                  {lim.spent !== null ? usdt(lim.spent) : "Unknown"} of {usdt(lim.cap)} USD₮
                 </dd>
               </div>
               <div>
                 <dt>Left</dt>
-                <dd className="num">{usdt(left)} USD₮</dd>
+                <dd className="num">{lim.spent !== null ? `${usdt(left)} USD₮` : "Unknown"}</dd>
               </div>
               <div>
                 <dt>Resets</dt>
                 <dd>
-                  Monday <span className="num">00:00</span> UTC (<span className="num">{formatDateTime(lim.weekEndsAt)}</span> your time)
+                  {daily ? "Every day" : "Monday"} <span className="num">00:00</span> UTC (
+                  <span className="num">{formatDateTime(lim.resetsAt)}</span> your time)
                 </dd>
               </div>
               <div>
@@ -174,6 +184,11 @@ export function Home({
                 <dd className="num">{formatDate(lim.expiresAt)}</dd>
               </div>
             </dl>
+            {lim.observedAt && (
+              <p className="muted small">
+                Read from Celo <span className="num">{formatDateTime(lim.observedAt)}</span>
+              </p>
+            )}
           </Panel>
 
           <Panel title="Wallet">
@@ -186,6 +201,12 @@ export function Home({
                 <dt>CELO</dt>
                 <dd className="num">{b ? celo(b.celo) : "Unknown"}</dd>
               </div>
+              {state.identity && (
+                <div>
+                  <dt>Agent ID</dt>
+                  <dd>{state.identity.registered ? "Registered (ERC-8004)" : "Not registered yet"}</dd>
+                </div>
+              )}
               <div>
                 <dt>Address</dt>
                 <dd className="addr-row">
@@ -216,11 +237,15 @@ export function Home({
   );
 }
 
-function StatusAndStop({ client, state, now }: { client: GramClient; state: GramState; now: number }) {
+function StatusAndStop({ client, state, now }: { client: AutumnClient; state: AutumnState; now: number }) {
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const stopping = state.agent.kind === "stopping";
-  const next = state.plan?.nextPurchaseAt;
+  const plan = state.plan!;
+  const next = plan.nextPurchaseAt;
+  const due = next !== null && next.getTime() <= now;
+  const per = plan.period === "day" ? "day" : "week";
+  const priceCheckDown = state.price?.priceCheckAvailable === false;
 
   const stop = async () => {
     setError(null);
@@ -239,12 +264,17 @@ function StatusAndStop({ client, state, now }: { client: GramClient; state: Gram
           <Spinner /> Sending the revoke to Celo. This takes a few seconds.
         </p>
       ) : (
-        <p>
-          Next purchase:{" "}
-          <strong>{next ? <span className="num">{formatDateTime(next)} ({relative(next, now)})</span> : "none scheduled"}</strong>.{" "}
-          Plan: <span className="num">{usdt(state.plan!.weeklyAmount)} USD₮</span> of gold a week
-          {state.plan!.buyTheDip ? ", plus one extra buy if gold drops 2%" : ""}.
-        </p>
+        <>
+          <p>
+            Next purchase:{" "}
+            <strong>
+              {next === null ? "none scheduled" : due ? "due now, at the agent's next run" : <span className="num">{formatDateTime(next)} ({relative(next, now)})</span>}
+            </strong>
+            . Plan: <span className="num">{usdt(plan.amount)} USD₮</span> of gold a {per}
+            {plan.buyTheDip ? ", plus one extra buy if gold drops 2%" : ""}.
+          </p>
+          {priceCheckDown && <p className="muted">Price check not available right now, the agent will retry.</p>}
+        </>
       )}
 
       {!stopping && !confirming && (
@@ -279,7 +309,7 @@ function StatusAndStop({ client, state, now }: { client: GramClient; state: Gram
 }
 
 const REFUSAL: Record<RefusalReason, string> = {
-  "weekly-cap": "Weekly limit reached",
+  cap: "Limit reached",
   "not-gold": "Not a gold purchase",
   expired: "The plan has ended",
   revoked: "The agent was stopped",
@@ -301,7 +331,7 @@ function ActivityRow({ item }: { item: ActivityItem }) {
         <>
           Paid <span className="num">{usdt(item.spent)} USD₮</span> at{" "}
           <span className="num">{usdt(perGram(item.usdtPerOunce))}</span> per gram.{" "}
-          {item.trigger === "dip" ? "Extra buy after a 2% drop." : "Weekly buy."}
+          {item.trigger === "dip" ? "Extra buy after a 2% drop." : item.period === "day" ? "Daily buy." : "Weekly buy."}
         </>
       );
       break;
@@ -310,27 +340,29 @@ function ActivityRow({ item }: { item: ActivityItem }) {
       title = `Purchase refused: ${REFUSAL[item.reason]}`;
       detail = (
         <>
-          The limits blocked a <span className="num">{usdt(item.attempted)} USD₮</span> buy. Nothing was spent.
+          The limits blocked {item.attempted !== null ? <>a <span className="num">{usdt(item.attempted)} USD₮</span> buy</> : "a buy"}. Nothing was
+          spent. Recorded by the agent.
         </>
       );
+      break;
+    case "skipped":
+      icon = "leaf";
+      title = item.retries ? "Purchase postponed" : "Purchase skipped";
+      detail = <>{item.text} {item.txHash ? "Recorded by the agent." : "Recorded by the agent; nothing was sent onchain."}</>;
       break;
     case "plan-started":
       icon = "leaf";
       title = "Plan started";
       detail = (
         <>
-          <span className="num">{usdt(item.weeklyAmount)} USD₮</span> of gold a week. Limits written onchain.
+          <span className="num">{usdt(item.amount)} USD₮</span> of gold a {item.period === "day" ? "day" : "week"}. Limits written onchain.
         </>
       );
       break;
     case "registration":
       icon = "leaf";
       title = "Wallet registered";
-      detail = (
-        <>
-          One-time Altana fee of <span className="num">{celo(item.feeCelo)}</span> CELO paid.
-        </>
-      );
+      detail = "Altana's one-time registration of your wallet, paid in CELO.";
       break;
     case "stopped":
       icon = "stop";

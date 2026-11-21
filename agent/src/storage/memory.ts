@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Address } from "viem";
+import type { Address, Hex } from "viem";
 import type { SerializedSession } from "@altananetwork/sdk";
 import type { Attempt, AttemptSlot, AttemptStatus, EncryptedKey, NewAttempt, PlanRecord, RunLogEntry } from "../types.js";
 import type { NewPlan, Storage } from "./types.js";
@@ -32,7 +32,7 @@ export class MemoryStorage implements Storage {
       throw new Error("session public key already used by another plan");
     }
     if (this.plans.has(plan.id)) throw new Error("plan id already exists");
-    const rec: PlanRecord = { ...plan, ownerId, status: "pending_grant" };
+    const rec: PlanRecord = { ...structuredClone(plan), ownerId, status: "pending_grant" };
     this.plans.set(rec.id, rec);
     this.keys.set(rec.id, key);
     return structuredClone(rec);
@@ -47,18 +47,37 @@ export class MemoryStorage implements Storage {
     return [...this.plans.values()].filter((p) => p.status === "active").map((p) => structuredClone(p));
   }
 
-  async activatePlan(planId: string, session: SerializedSession): Promise<void> {
+  async listPlansForWallet(walletAddress: Address): Promise<PlanRecord[]> {
+    const w = walletAddress.toLowerCase();
+    return [...this.plans.values()]
+      .filter((p) => p.walletAddress.toLowerCase() === w)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map((p) => structuredClone(p));
+  }
+
+  async countPendingPlans(walletAddress: Address, since: number): Promise<number> {
+    const w = walletAddress.toLowerCase();
+    return [...this.plans.values()].filter(
+      (p) => p.walletAddress.toLowerCase() === w && p.status === "pending_grant" && p.createdAt >= since,
+    ).length;
+  }
+
+  async activatePlan(planId: string, session: SerializedSession, grantTxHash?: Hex): Promise<void> {
     const p = this.plans.get(planId);
     if (!p || p.status !== "pending_grant") throw new Error("plan is not waiting for a grant");
     p.status = "active";
     p.session = structuredClone(session);
+    if (grantTxHash) p.grantTxHash = grantTxHash.toLowerCase() as Hex;
   }
 
-  async stopPlan(planId: string, reason: string): Promise<void> {
+  async stopPlan(planId: string, reason: string, at?: number, txHash?: Hex): Promise<void> {
     const p = this.plans.get(planId);
     if (!p) throw new Error("no such plan");
+    if (p.status === "stopped") return;
     p.status = "stopped";
     p.stoppedReason = reason;
+    if (at !== undefined) p.stoppedAt = at;
+    if (txHash) p.stopTxHash = txHash.toLowerCase() as Hex;
   }
 
   async getEncryptedSessionKey(planId: string): Promise<EncryptedKey | null> {
@@ -67,7 +86,7 @@ export class MemoryStorage implements Storage {
 
   async claimAttempt(a: NewAttempt): Promise<Attempt | null> {
     const taken = this.attempts.some(
-      (x) => x.planId === a.planId && x.weekId === a.weekId && x.slot === a.slot && BLOCKING.includes(x.status),
+      (x) => x.planId === a.planId && x.periodId === a.periodId && x.slot === a.slot && BLOCKING.includes(x.status),
     );
     if (taken) return null;
     const rec: Attempt = { ...a, id: String(++this.seq), status: "submitting" };
@@ -85,8 +104,8 @@ export class MemoryStorage implements Storage {
     return this.attempts.filter((x) => x.planId === planId && OPEN.includes(x.status)).map((x) => ({ ...x }));
   }
 
-  async countAttempts(planId: string, weekId: string, slot: AttemptSlot, status: AttemptStatus): Promise<number> {
-    return this.attempts.filter((x) => x.planId === planId && x.weekId === weekId && x.slot === slot && x.status === status).length;
+  async countAttempts(planId: string, periodId: string, slot: AttemptSlot, status: AttemptStatus): Promise<number> {
+    return this.attempts.filter((x) => x.planId === planId && x.periodId === periodId && x.slot === slot && x.status === status).length;
   }
 
   async creditedTxHashes(planId: string): Promise<Set<string>> {
@@ -102,5 +121,10 @@ export class MemoryStorage implements Storage {
   async lastRunLog(planId: string): Promise<RunLogEntry | null> {
     for (let i = this.runLog.length - 1; i >= 0; i--) if (this.runLog[i]!.planId === planId) return { ...this.runLog[i]! };
     return null;
+  }
+
+  async listRunLog(planIds: readonly string[], limit: number): Promise<RunLogEntry[]> {
+    const ids = new Set(planIds);
+    return this.runLog.filter((e) => ids.has(e.planId)).reverse().slice(0, limit).map((e) => ({ ...e }));
   }
 }

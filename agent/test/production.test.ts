@@ -26,17 +26,17 @@ describe.skipIf(!url || process.env.MAINNET_READS !== "1")("production runner (d
     const env = {
       DATABASE_URL: url,
       AUTUMN_KEY_ENCRYPTION_KEY: encKey,
-      GOLD_BUYER_ADDRESS: "0x000000000000000000000000000000000000dEaD",
-      GOLD_BUYER_DEPLOY_BLOCK: String(head.number - 20_000n),
+      AUTUMN_GOLD_BUYER_ADDRESS: "0x000000000000000000000000000000000000dEaD",
+      AUTUMN_GOLD_BUYER_DEPLOY_BLOCK: String(head.number - 20_000n),
     };
     const wallet = getAddress(privateKeyToAccount(generatePrivateKey()).address);
     const { plan, sessionPublicKey, grant } = await createPlan(
-      { storage, encryptionKey: Buffer.from(encKey, "hex"), goldBuyer: getAddress(env.GOLD_BUYER_ADDRESS), now },
-      { walletAddress: wallet, amountPerWeek: 5_000_000n, expiresAt: now + 30 * 86_400, dayOfWeek: 0, hourUtc: 0 },
+      { storage, encryptionKey: Buffer.from(encKey, "hex"), goldBuyer: getAddress(env.AUTUMN_GOLD_BUYER_ADDRESS), now },
+      { walletAddress: wallet, amountPerBuy: 5_000_000n, expiresAt: now + 30 * 86_400, dayOfWeek: 0, hourUtc: 0 },
     );
     await storage.activatePlan(plan.id, {
       walletAddress: wallet, publicKey: sessionPublicKey,
-      permissions: { calls: grant.permissions.calls, spend: [{ limit: grant.weeklyCap.toString(), period: "week", token: grant.feeToken }] },
+      permissions: { calls: grant.permissions.calls, spend: [{ limit: grant.periodCap.toString(), period: "week", token: grant.feeToken }] },
       expiry: grant.expiry,
     });
     await pool.end();
@@ -45,7 +45,7 @@ describe.skipIf(!url || process.env.MAINNET_READS !== "1")("production runner (d
     try {
       expect(live).toBe(false);
       const report = await runner.tick();
-      expect(report.plans).toEqual([{ planId: plan.id, decision: "stopped", reason: "the owner revoked the session" }]);
+      expect(report.plans).toEqual([{ planId: plan.id, decision: "stopped", reason: "the owner revoked the session", kind: "revoked" }]);
     } finally {
       await p2.end();
     }

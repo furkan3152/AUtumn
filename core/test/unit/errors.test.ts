@@ -21,6 +21,12 @@ describe("SDK error mapping", () => {
     expect(explainAltanaError(new Error("wrapped", { cause: altana("spend_limit_exceeded") })).kind).toBe("cap_exceeded");
   });
 
+  it("reads the pool oracle's OLD revert as a price check that is not available yet, nothing sent", () => {
+    expect(explainAltanaError(altana("unknown", "execution reverted: OLD"))).toMatchObject({ kind: "twap_unavailable", bought: "no", stopsPlan: false });
+    expect(explainAltanaError(new Error("simulation failed", { cause: new Error('reverted with reason "OLD"') })).kind).toBe("twap_unavailable");
+    expect(explainAltanaError(new Error("old socket")).kind).toBe("unknown");
+  });
+
   it("treats an unrecognised error as an unknown outcome", () => {
     expect(explainAltanaError(new Error("socket hang up"))).toMatchObject({ kind: "unknown", bought: "unknown" });
   });
