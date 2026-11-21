@@ -5,12 +5,13 @@ import { SEND_ASSET_INFO, checkDestination, parseAmount } from "@autumn/core";
 import { type Address, type AutumnClient, type AutumnState, type SendAsset, type SendQuote, type SendResult } from "@/lib/autumn";
 import { celo, formatDateTime, formatGrams, formatUnits, shortAddress, usdt, usdtFine } from "@/lib/format";
 import { errorText } from "@/lib/useAutumn";
-import { Button, Panel, Spinner, TxLink } from "../ui";
+import { Button, FailureNotice, Label, Panel, ScreenHead, Spinner, TxLink } from "../ui";
+import { Icon, type IconName } from "../icons";
 
-const ASSETS: { id: SendAsset; label: string }[] = [
-  { id: "USDT", label: "USD₮" },
-  { id: "XAUT0", label: "Gold" },
-  { id: "CELO", label: "CELO" },
+const ASSETS: { id: SendAsset; label: string; icon: IconName }[] = [
+  { id: "USDT", label: "USD₮", icon: "note" },
+  { id: "XAUT0", label: "Gold", icon: "bar" },
+  { id: "CELO", label: "CELO", icon: "token" },
 ];
 
 const balanceOf = (b: AutumnState["balances"], a: SendAsset) => (!b ? 0n : a === "USDT" ? b.usdt : a === "XAUT0" ? b.gold : b.celo);
@@ -34,7 +35,7 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
   const [step, setStep] = useState<Step>({ kind: "form" });
   const [quote, setQuote] = useState<SendQuote | null>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [touched, setTouched] = useState({ to: false, amount: false });
   const assetName = useId();
@@ -80,7 +81,7 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
       if (amount > q.max) throw new Error(`That leaves too little for the fee. The most you can send is ${shown(q.max, asset)}.`);
       setStep({ kind: "review", to: dest.address, amount, quote: q });
     } catch (e) {
-      setError(errorText(e));
+      setError(e);
     } finally {
       setBusy(false);
     }
@@ -95,29 +96,26 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
       const result = await client.send({ asset, to: dst, amount: amt });
       setStep({ kind: "done", to: dst, amount: amt, result });
     } catch (e) {
-      setError(errorText(e));
+      setError(e);
       setStep({ kind: "review", to: dst, amount: amt, quote: step.quote });
     }
   };
 
   return (
-    <div className="stack narrow">
-      <div className="screen-head">
-        <h1>Send out</h1>
-        <Button variant="plain" className="btn--small" onClick={onBack} disabled={step.kind === "sending"}>
-          Back
-        </Button>
-      </div>
+    <div className="screen send">
+      <ScreenHead title="Send out" onBack={onBack} backDisabled={step.kind === "sending"} />
 
       {step.kind === "form" && (
         <>
-          <Panel>
+          <Panel className="send__what">
             <p>
               Move USD₮, gold or CELO out of your wallet at any time, whether the agent is running or stopped. Your passkey
               approves the transfer.
             </p>
             <fieldset className="presets presets--spaced">
-              <legend className="frame__title">What to send</legend>
+              <legend className="legend">
+                <Icon name="send" /> What to send
+              </legend>
               <div className="presets__row">
                 {ASSETS.map((a) => (
                   <label key={a.id} className={`preset ${asset === a.id ? "is-on" : ""}`}>
@@ -132,6 +130,7 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
                         setTouched((t) => ({ ...t, amount: false }));
                       }}
                     />
+                    <Icon name={a.icon} className="preset__icon" />
                     <span className="preset__amount preset__amount--small">{a.label}</span>
                     <span className="preset__unit num">{a.id === "XAUT0" ? `${formatGrams(balanceOf(state.balances, a.id))} g` : a.id === "USDT" ? usdt(balanceOf(state.balances, a.id)) : celo(balanceOf(state.balances, a.id))}</span>
                   </label>
@@ -140,7 +139,7 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
             </fieldset>
           </Panel>
 
-          <Panel title="To">
+          <Panel title="To" icon="wallet" className="send__to">
             <div className="field">
               <label htmlFor={toId}>Celo address you control</label>
               <input
@@ -170,7 +169,7 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
             </p>
           </Panel>
 
-          <Panel title="Amount">
+          <Panel title="Amount" icon="coin" className="send__amount">
             <div className="field">
               <label htmlFor={amountId}>
                 {SEND_ASSET_INFO[asset].symbol} to send (you have <span className="num">{shown(balance, asset)}</span>)
@@ -209,6 +208,7 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
             <FeeLine quote={quote} error={quoteError} asset={asset} />
           </Panel>
 
+          <div className="send__act">
           <Button block onClick={review} disabled={busy}>
             {busy ? (
               <>
@@ -218,32 +218,37 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
               "Review"
             )}
           </Button>
-          {error && (
-            <p className="error-text" role="alert">
-              {error}
-            </p>
-          )}
+          <FailureNotice error={error} />
+          </div>
         </>
       )}
 
       {(step.kind === "review" || step.kind === "sending") && (
-        <Panel title="Check and send">
+        <Panel title="Check and send" icon="send" className="send__review">
           <dl className="facts">
             <div>
-              <dt>Send</dt>
+              <dt>
+                <Label icon="send">Send</Label>
+              </dt>
               <dd className="num">{shown(step.amount, asset)}</dd>
             </div>
             <div>
-              <dt>To</dt>
+              <dt>
+                <Label icon="wallet">To</Label>
+              </dt>
               <dd className="num break">{step.to}</dd>
             </div>
             <div>
-              <dt>Network</dt>
+              <dt>
+                <Label icon="globe">Network</Label>
+              </dt>
               <dd>Celo</dd>
             </div>
             {step.kind === "review" && (
               <div>
-                <dt>Fee</dt>
+                <dt>
+                <Label icon="token">Fee</Label>
+              </dt>
                 <dd>
                   up to <span className="num">{step.quote.feeSymbol === "CELO" ? `${formatUnits(step.quote.fee, 18, 4)} CELO` : `${usdtFine(step.quote.fee)} USD₮`}</span>
                   {step.quote.registrationCelo > 0n && (
@@ -269,16 +274,12 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
               </Button>
             </div>
           )}
-          {error && (
-            <p className="error-text" role="alert">
-              Not sent: {error}
-            </p>
-          )}
+          <FailureNotice error={error} onRetry={confirm} prefix="Not sent: " />
         </Panel>
       )}
 
       {step.kind === "done" && (
-        <Panel title="Sent">
+        <Panel title="Sent" icon="check" className="send__review">
           <p role="status">
             Celo confirmed the transfer of <span className="num">{shown(step.amount, asset)}</span> to{" "}
             <span className="num">{shortAddress(step.to)}</span>.{" "}
@@ -286,15 +287,21 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
           </p>
           <dl className="facts">
             <div>
-              <dt>USD₮</dt>
+              <dt>
+                <Label icon="note">USD₮</Label>
+              </dt>
               <dd className="num">{usdt(step.result.balances.usdt)}</dd>
             </div>
             <div>
-              <dt>Gold</dt>
+              <dt>
+                <Label icon="bar">Gold</Label>
+              </dt>
               <dd className="num">{formatGrams(step.result.balances.gold)} g</dd>
             </div>
             <div>
-              <dt>CELO</dt>
+              <dt>
+                <Label icon="token">CELO</Label>
+              </dt>
               <dd className="num">{celo(step.result.balances.celo)}</dd>
             </div>
           </dl>

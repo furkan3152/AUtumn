@@ -21,7 +21,7 @@ export function Sprite({
     let start = 0;
     for (let i = 1; i <= row.length; i++) {
       if (i === row.length || row[i] !== row[start]) {
-        const c = row[start];
+        const c = row[start]!;
         if (c !== "." && palette[c]) {
           rects.push(
             <rect key={`${ry}-${start}`} x={x + start} y={y + ry} width={i - start} height={1} fill={palette[c]} />,
@@ -36,14 +36,18 @@ export function Sprite({
 
 /* ---------- Palette (original, warm) ---------- */
 export const P = {
-  ink: "#2a1c12",
+  ink: "#2a1a10",
   skin: "#f0c193",
   skinShade: "#c98a5a",
-  hat: "#3f6fb0",
-  hatLight: "#6f9ad6",
-  tunic: "#4f8a3a",
-  tunicDark: "#356628",
-  boot: "#6b3f22",
+  blush: "#e88a74",
+  cap: "#3f6e8f",
+  capLight: "#6a9bbd",
+  scarf: "#c4452f",
+  scarfDark: "#8a2a1a",
+  coat: "#6b8a3a",
+  coatDark: "#475f25",
+  trousers: "#5a3a22",
+  boot: "#3a2416",
   gold: "#f2bf3a",
   goldLight: "#ffe58a",
   goldDark: "#b8801c",
@@ -60,83 +64,101 @@ export const helperPalette: Palette = {
   k: P.ink,
   s: P.skin,
   c: P.skinShade,
-  h: P.hat,
-  H: P.hatLight,
-  g: P.tunic,
-  G: P.tunicDark,
+  o: P.blush,
+  h: P.cap,
+  H: P.capLight,
+  r: P.scarf,
+  R: P.scarfDark,
+  g: P.coat,
+  G: P.coatDark,
+  p: P.trousers,
+  q: "#3e2716",
   b: P.boot,
-  y: P.gold,
-  w: P.white,
 };
 
-/* The helper: a small courier in a knit cap. 10 x 14. */
+/* The helper: a small courier in a knit cap and a red scarf, facing right. 11 x 16. */
+const HEAD = [
+  "....kkkk...",
+  "...kHHhhk..",
+  "..kHhhhhhk.",
+  "..khhhhhhhk",
+  ".kkkkkkkkkk",
+  ".ksssssssk.",
+  ".ksssksksk.",
+  ".ksssssosk.",
+  "..krrrrrrk.",
+] as const;
+const HEAD_BLINK = [...HEAD.slice(0, 6), ".ksssssssk.", ".ksskkskkk.", "..krrrrrrk."] as const;
+
 export const HELPER_STAND = [
-  "....kk....",
-  "...kHHk...",
-  "..khhHhk..",
-  ".khhhhhhk.",
-  ".kkkkkkkk.",
-  ".kssssssk.",
-  ".kskssksk.",
-  ".kssssssk.",
-  "..kssssk..",
-  ".kgggGggk.",
-  "ksgggGgggs",
-  ".kgggGggk.",
-  "..kbk.kbk.",
-  "..kkk.kkk.",
+  ...HEAD,
+  ".kgggrRgggk",
+  "kgkggrggkgk",
+  "kskgggggksk",
+  ".kGGGGGGGk.",
+  "..kppkppk..",
+  "..kbbkbbk..",
+  "..kkk.kkk..",
 ] as const;
 
+export const HELPER_BLINK = [...HEAD_BLINK, ...HELPER_STAND.slice(9)] as const;
+
+/** Stride: front leg forward, arms swinging. */
 export const HELPER_WALK_A = [
-  "....kk....",
-  "...kHHk...",
-  "..khhHhk..",
-  ".khhhhhhk.",
-  ".kkkkkkkk.",
-  ".kssssssk.",
-  ".kssksskk.",
-  ".kssssssk.",
-  "..kssssk..",
-  ".kgggGggk.",
-  ".sgggGgggs",
-  ".kgggGggk.",
-  ".kbk...kbk",
-  ".kkk...kkk",
+  ...HEAD,
+  ".kgggrRgggk",
+  "kgkggrgggkk",
+  "ksgggggggsk",
+  ".kGGGGGGGk.",
+  ".kppk.kqqk.",
+  "kbbk...kbbk",
+  "kkk.....kkk",
 ] as const;
 
+/** Passing: legs together, body one pixel up. */
 export const HELPER_WALK_B = [
-  "..........",
-  "....kk....",
-  "...kHHk...",
-  "..khhHhk..",
-  ".khhhhhhk.",
-  ".kkkkkkkk.",
-  ".kssssssk.",
-  ".kssksskk.",
-  "..kssssk..",
-  ".kgggGggk.",
-  "ksgggGggks",
-  ".kgggGggk.",
-  "...kbbk...",
-  "...kkkk...",
+  "...........",
+  ...HEAD,
+  ".kgggrRgggk",
+  "kgkggrggkgk",
+  "kskgggggksk",
+  ".kGGGGGGGk.",
+  "...kppqk...",
+  "...kbbbk...",
 ] as const;
 
-/* Sitting, eyes closed. 12 x 11. */
+/** Stride with the other leg forward. */
+export const HELPER_WALK_C = [
+  ...HEAD,
+  ".kgggrRgggk",
+  "kkgggrggkgk",
+  "ksgggggggsk",
+  ".kGGGGGGGk.",
+  ".kqqk.kppk.",
+  "kbbk...kbbk",
+  "kkk.....kkk",
+] as const;
+
+/* Sitting on a log by the fire, eyes closed. 13 x 13. */
 export const HELPER_SIT = [
-  "....kk......",
-  "...kHHk.....",
-  "..khhHhk....",
-  ".khhhhhhk...",
-  ".kkkkkkkk...",
-  ".kssssssk...",
-  ".kccsscck...",
-  "..kssssk....",
-  ".kgggGggk...",
-  "ksgggGgggbbk",
-  ".kkkkkkkkkkk",
+  "....kkkk.....",
+  "...kHHhhk....",
+  "..kHhhhhhk...",
+  "..khhhhhhhk..",
+  ".kkkkkkkkkk..",
+  ".ksssssssk...",
+  ".ksskkskkk...",
+  ".ksssssosk...",
+  "..krrrrrrk...",
+  ".kgggrRgggk..",
+  "kskggrgggskk.",
+  ".kGGGGGGppppk",
+  "..kkkkkkkbbbk",
 ] as const;
 
-export const COIN = [".kk.", "kyyk", "kyyk", ".kk."] as const;
-export const coinPalette: Palette = { k: P.goldDark, y: P.gold };
+export const LOG = [".kkkkkkkkkkkk.", "kbnnnnnnnnnnbk", "kBbbbbbbbbbbBk", ".kkkkkkkkkkkk."] as const;
+
+export const COIN = [".kk.", "kylk", "kyyk", ".kk."] as const;
+export const coinPalette: Palette = { k: P.goldDark, y: P.gold, l: P.goldLight };
 
 export const Z = ["kkk", "..k", ".k.", "kkk"] as const;

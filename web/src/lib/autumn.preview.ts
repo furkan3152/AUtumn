@@ -4,6 +4,14 @@
  *
  * Optional URL parameter `?preview=<scenario>` picks a starting point:
  *   fresh (default) | funded | active | empty | stopped | stray | error | loading
+ *   | device-bound        a funded wallet whose passkey is device-bound (not discoverable): the UI should ask for the backup code
+ *   | fresh-device-bound  no wallet yet; creating one makes a device-bound passkey
+ *
+ * Optional `&passkeyError=<reason>` makes createWallet and restoreWallet fail with that PasskeyError reason:
+ *   cancelled | wrong-site | already-exists | interrupted | unsupported
+ *
+ * The preview's backup code is a real, checksummed code (with made-up passkey facts); restoreFromBackupCode
+ * accepts it (or any valid code for this page's host) and refuses malformed ones exactly as the live client does.
  */
 import { USDT as USDT_TOKEN, checkDestination, maxSendable, type SendAsset } from "@autumn/core";
 import {
@@ -23,6 +31,8 @@ import {
   type TxHash,
   type Wallet,
 } from "./autumn";
+import { BackupCodeError, decodeBackupCode, encodeBackupCode } from "./backupCode";
+import { passkeyFailure, type Discoverable, type PasskeyFailureReason } from "./passkey";
 
 const USDT = 10n ** BigInt(DECIMALS.USDT);
 const CELO = 10n ** BigInt(DECIMALS.CELO);
@@ -34,6 +44,16 @@ const FEE = 20n * CELO;
 const PREVIEW_FEES = { usdtPerCelo: 52_214n, relayFeeEstimate: 5_000n };
 const PREVIEW_KEY = `0x04${"5c".repeat(32)}${"a7".repeat(32)}` as const;
 const PREVIEW_SEND_FEE = 6_000n; // 0.006 USD₮
+/** Made-up passkey facts for the preview's backup code. */
+const PREVIEW_CREDENTIAL_ID = "pVw3rQe1Zm9cT0bXyK7aHn2LdUo5sJ8gWfE4iC6vRkA";
+const PREVIEW_PASSKEY_PUBLIC_KEY = `0x${"4b".repeat(32)}${"e2".repeat(32)}` as const;
+const PASSKEY_ERROR_NAMES: Record<PasskeyFailureReason, string> = {
+  cancelled: "NotAllowedError",
+  "wrong-site": "SecurityError",
+  "already-exists": "InvalidStateError",
+  interrupted: "AbortError",
+  unsupported: "NotSupportedError",
+};
 
 let counter = 0;
 function fakeHash(): TxHash {
@@ -107,12 +127,12 @@ function makePlan(input: Omit<PlanInput, "expiresAt">, startedAt: Date, nextPurc
 
 function scenario(name: string): AutumnState {
   const s = emptyState();
-  if (name === "fresh" || name === "error" || name === "loading") return s;
+  if (name === "fresh" || name === "fresh-device-bound" || name === "error" || name === "loading") return s;
   const now = Date.now();
-  s.wallet = { address: PREVIEW_ADDRESS, createdAt: new Date(now - 40 * DAY) };
+  s.wallet = { address: PREVIEW_ADDRESS, createdAt: new Date(now - 40 * DAY), passkey: { discoverable: name === "device-bound" ? false : true } };
   s.registration = { walletRegistered: false, nextGrantFeeCelo: FEE, perKeyFeeCelo: FEE / 2n };
   s.balances = { usdt: 50n * USDT, gold: 0n, celo: 20n * CELO + CELO / 2n, observedAt: new Date() };
-  if (name === "funded") return s;
+  if (name === "funded" || name === "device-bound") return s;
 
   const weekly = 5n * USDT;
   const start = name === "empty" ? new Date(now - 60_000) : new Date(now - 4 * WEEK_MS + 6000);
@@ -175,6 +195,13 @@ export function createPreviewClient(): AutumnClient {
   const name = params?.get("preview") ?? "fresh";
   let state = scenario(name);
   let failNext = name === "error";
+  const passkeyError = params?.get("passkeyError") as PasskeyFailureReason | null;
+  const createdDiscoverable: Discoverable = name === "fresh-device-bound" ? false : true;
+  const rpId = typeof window === "undefined" ? "localhost" : window.location.hostname.toLowerCase();
+  const failPasskey = (step: "create" | "find") => {
+    if (!passkeyError || !(passkeyError in PASSKEY_ERROR_NAMES)) return;
+    throw passkeyFailure({ name: PASSKEY_ERROR_NAMES[passkeyError], message: "preview" }, step)!;
+  };
   const listeners = new Set<() => void>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const emit = () => listeners.forEach((l) => l());
@@ -238,7 +265,8 @@ export function createPreviewClient(): AutumnClient {
     },
     async createWallet() {
       await wait(1200);
-      const wallet: Wallet = { address: PREVIEW_ADDRESS, createdAt: new Date() };
+      failPasskey("create");
+      const wallet: Wallet = { address: PREVIEW_ADDRESS, createdAt: new Date(), passkey: { discoverable: createdDiscoverable } };
       state = {
         ...state,
         wallet,
@@ -256,7 +284,34 @@ export function createPreviewClient(): AutumnClient {
     },
     async restoreWallet() {
       await wait(900);
+      failPasskey("find");
       throw new Error("No Autumn passkey was found on this device (preview).");
+    },
+    async getBackupCode() {
+      if (!state.wallet) throw new Error("There is no wallet on this device yet.");
+      return encodeBackupCode({
+        wallet: state.wallet.address,
+        credentialId: PREVIEW_CREDENTIAL_ID,
+        publicKey: PREVIEW_PASSKEY_PUBLIC_KEY,
+        rpId,
+        discoverable: state.wallet.passkey.discoverable,
+      });
+    },
+    async restoreFromBackupCode(code: string) {
+      const d = decodeBackupCode(code);
+      if (d.rpId !== rpId) throw new BackupCodeError(`This backup code is for a passkey on ${d.rpId}. This app uses passkeys on ${rpId}.`);
+      await wait(900);
+      if (state.wallet && state.wallet.address.toLowerCase() !== d.wallet.toLowerCase()) {
+        throw new Error(`This browser already holds another Autumn wallet (${state.wallet.address}). Nothing was changed.`);
+      }
+      const wallet: Wallet = { address: d.wallet, createdAt: new Date(), passkey: { discoverable: d.discoverable } };
+      state = {
+        ...state,
+        wallet,
+        balances: state.balances ?? { usdt: 50n * USDT, gold: 0n, celo: 20n * CELO + CELO / 2n, observedAt: new Date() },
+      };
+      emit();
+      return wallet;
     },
     async confirmPlan(input) {
       await wait(1500);

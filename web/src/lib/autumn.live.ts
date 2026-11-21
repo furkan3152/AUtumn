@@ -20,7 +20,10 @@ import {
   type PasskeyCredential,
   type SerializedSession,
   type Signer,
+  type PasskeyWebAuthnFns,
+  RELAY_URL,
 } from "@altananetwork/sdk";
+import { BaseError, ContractFunctionRevertedError, ContractFunctionZeroDataError, toHex, type Hex } from "viem";
 import {
   XAUT0,
   USDT,
@@ -28,6 +31,7 @@ import {
   checkDestination,
   createCeloPublicClient,
   ALTANA_ORCHESTRATOR,
+  altanaAccountAbi,
   estimateRelayFeeUsdt,
   maxSendable,
   readAgentIdMinted,
@@ -76,6 +80,18 @@ import {
   type Wallet,
 } from "./autumn";
 import { passkeyOriginProblem, type PublicConfig } from "./env";
+import { BackupCodeError, decodeBackupCode, encodeBackupCode, webAuthnKeyHash } from "./backupCode";
+import {
+  browserCreateFn,
+  browserGetFn,
+  hasWebAuthn,
+  passkeyFailure,
+  preferredResidentKeyCreateFn,
+  unsupportedPasskeys,
+  userHandleFillingGetFn,
+  type Discoverable,
+} from "./passkey";
+import { readRecord, reconcileRecord, saveRecord } from "./walletStore";
 
 const WALLET_KEY = "autumn:v1:wallet";
 /** Older single-entry form, read once and migrated. */
@@ -95,7 +111,14 @@ const CACHE_MARGIN = 64n;
 const POLL_MS = 20_000;
 const CELO_CHAIN_ID = 42220;
 
-type StoredWallet = { address: Address; credential: PasskeyCredential; createdAt: string };
+/**
+ * The wallet as this browser keeps it (localStorage and IndexedDB, see walletStore.ts). Public facts only: the
+ * passkey's private key never leaves the device's authenticator. `discoverable` is absent for wallets saved before
+ * it was recorded: those passkeys were created with residentKey "required" (or found from the passkey alone), so
+ * they are discoverable.
+ */
+type StoredWallet = { address: Address; credential: PasskeyCredential; createdAt: string; discoverable?: Discoverable };
+type WebAuthnCredential = Extract<PasskeyCredential, { kind: "webauthn" }>;
 type StoredPending = {
   planId: string;
   wallet: Address;
@@ -191,20 +214,96 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     fees?: FeeFacts;
   } = { sessions: new Map() };
 
-  const storedWallet = () => loadJson<StoredWallet>(WALLET_KEY);
+  const storedWallet = (): StoredWallet | null => {
+    const raw = readRecord(WALLET_KEY);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as StoredWallet;
+    } catch {
+      return null;
+    }
+  };
+  /** Copies the wallet record between localStorage and IndexedDB once per page load, before the first read. */
+  let reconciled: Promise<unknown> | null = null;
+  const reconcile = () => (reconciled ??= reconcileRecord(WALLET_KEY).catch(() => null));
+  const discoverableOf = (w: StoredWallet): Discoverable => w.discoverable ?? true;
   function admin(): { wallet: { address: Address }; signer: Signer } {
     const w = storedWallet();
     if (!w) throw new Error("There is no wallet on this device yet.");
-    return { wallet: { address: w.address }, signer: signerFromPasskey(w.credential) };
+    // A discoverable passkey signs exactly as before. A device-bound one returns no user handle when asked by its id,
+    // which porto's Key.sign refuses; the SDK's documented getFn hook fills it with the wallet address (the value
+    // written into the passkey at creation). The signature itself is unchanged.
+    const webAuthn: PasskeyWebAuthnFns | undefined =
+      discoverableOf(w) === true ? undefined : { getFn: userHandleFillingGetFn(browserGetFn(), w.address) as NonNullable<PasskeyWebAuthnFns["getFn"]> };
+    return { wallet: { address: w.address }, signer: signerFromPasskey(w.credential, webAuthn ? { webAuthn } : undefined) };
   }
   function assertPasskeyOrigin() {
     const problem = passkeyOriginProblem(cfg, window.location);
     if (problem) throw new Error(problem);
   }
-  function remember(address: Address, credential: PasskeyCredential): Wallet {
+  async function remember(address: Address, credential: PasskeyCredential, discoverable: Discoverable): Promise<Wallet> {
     const createdAt = new Date();
-    saveJson(WALLET_KEY, { address, credential, createdAt: createdAt.toISOString() } satisfies StoredWallet);
-    return { address, createdAt };
+    const record: StoredWallet = { address, credential, createdAt: createdAt.toISOString(), discoverable };
+    await saveRecord(WALLET_KEY, JSON.stringify(record));
+    return { address, createdAt, passkey: { discoverable } };
+  }
+
+  /** The SDK network's relay, for reading a wallet's keys before its first transaction. */
+  async function relayAdminKeys(wallet: Address): Promise<{ type: string; role: string; publicKey: string; hash: string }[]> {
+    const res = await fetch(network.relayUrl ?? RELAY_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "wallet_getKeys", params: [{ address: wallet, chainIds: [toHex(CELO_CHAIN_ID)] }] }),
+      cache: "no-store",
+    });
+    const data = (await res.json().catch(() => null)) as { result?: Record<string, unknown>; error?: { message?: string } } | null;
+    if (!res.ok || !data) throw new Error(`The Altana relay could not be read (${res.status}).`);
+    if (data.error) throw new Error(`The Altana relay does not know this wallet (${data.error.message ?? "no reason given"}).`);
+    const keys = data.result?.[toHex(CELO_CHAIN_ID)];
+    return Array.isArray(keys) ? (keys as { type: string; role: string; publicKey: string; hash: string }[]) : [];
+  }
+
+  /**
+   * Whether `publicKey` (a WebAuthn P-256 key) is an admin key of `wallet`. Once the wallet has transacted its
+   * account code is on Celo and the account's own getKey answers. Before that the wallet exists only as the relay's
+   * stored upgrade (the authorization that lands with the first transaction), so the relay's key list answers.
+   * Throws a plain sentence when it is not, or when neither could be read.
+   */
+  async function assertAdminKey(wallet: Address, publicKey: Hex): Promise<"celo" | "relay"> {
+    const keyHash = webAuthnKeyHash(publicKey);
+    const notAdmin = "This backup code's passkey is not an admin of that wallet, so it was not restored. Check that the code is yours.";
+    let code: Hex | undefined;
+    try {
+      code = await pub.getCode({ address: wallet });
+    } catch {
+      throw new Error("Celo could not be read to check the backup code. Nothing was changed; try again.");
+    }
+    if (code && code !== "0x") {
+      let key: { expiry: number; keyType: number; isSuperAdmin: boolean; publicKey: Hex };
+      try {
+        key = await pub.readContract({ address: wallet, abi: altanaAccountAbi, functionName: "getKey", args: [keyHash] });
+      } catch (e) {
+        const reverted = e instanceof BaseError && !!e.walk((x) => x instanceof ContractFunctionRevertedError || x instanceof ContractFunctionZeroDataError);
+        if (reverted) throw new Error(notAdmin);
+        throw new Error("Celo could not be read to check the backup code. Nothing was changed; try again.");
+      }
+      const expired = Number(key.expiry) !== 0 && Number(key.expiry) * 1000 <= Date.now();
+      if (!key.isSuperAdmin || Number(key.keyType) !== 1 || key.publicKey.toLowerCase() !== publicKey.toLowerCase() || expired) {
+        throw new Error(notAdmin);
+      }
+      return "celo";
+    }
+    let keys: Awaited<ReturnType<typeof relayAdminKeys>>;
+    try {
+      keys = await relayAdminKeys(wallet);
+    } catch (e) {
+      throw new Error(`This wallet has not made a transaction yet, and ${errText(e).replace(/^The /, "the ")} Nothing was changed.`);
+    }
+    const match = keys.some(
+      (k) => k.type === "webauthnp256" && k.role === "admin" && k.publicKey?.toLowerCase() === publicKey.toLowerCase() && k.hash?.toLowerCase() === keyHash.toLowerCase(),
+    );
+    if (!match) throw new Error(notAdmin);
+    return "relay";
   }
 
   async function loadTxFacts(hash: string | null | undefined, wallet: Address): Promise<void> {
@@ -326,6 +425,7 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
 
   async function getState(): Promise<AutumnState> {
     const notices: string[] = [];
+    await reconcile();
     const w = storedWallet();
 
     let price: GoldPrice | null = last.price ?? null;
@@ -366,7 +466,7 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
       }
       return { wallet: null, balances: null, registration, price, plan: null, agent: { kind: "none" }, activity: [], identity: null, fees, strayKey: null, notices };
     }
-    const wallet: Wallet = { address: w.address, createdAt: new Date(w.createdAt) };
+    const wallet: Wallet = { address: w.address, createdAt: new Date(w.createdAt), passkey: { discoverable: discoverableOf(w) } };
 
     if (serverMode === null) {
       serverMode = await api<{ configured: boolean; live: boolean }>("/api/health").catch(() => null);
@@ -794,15 +894,62 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     },
     async createWallet() {
       assertPasskeyOrigin();
-      const w = await sdkClient().createPasskeyWallet({ name: "Autumn", rpId: cfg.rpId });
-      const wallet = remember(w.address as Address, w.signer.credential);
+      if (!hasWebAuthn()) throw unsupportedPasskeys("create");
+      // residentKey "preferred" instead of porto's "required": see passkey.ts. Everything else porto sets is kept.
+      let discoverable: Discoverable = "unknown";
+      const createFn = preferredResidentKeyCreateFn(browserCreateFn(), (d) => (discoverable = d));
+      let w: Awaited<ReturnType<Client["createPasskeyWallet"]>>;
+      try {
+        w = await sdkClient().createPasskeyWallet({
+          name: "Autumn",
+          rpId: cfg.rpId,
+          webAuthn: { createFn: createFn as NonNullable<PasskeyWebAuthnFns["createFn"]> },
+        });
+      } catch (e) {
+        throw passkeyFailure(e, "create") ?? e;
+      }
+      const wallet = await remember(w.address as Address, w.signer.credential, discoverable);
       emit();
       return wallet;
     },
     async restoreWallet() {
       assertPasskeyOrigin();
-      const w = await sdkClient().recoverFromPasskey({ rpId: cfg.rpId, chainId: CELO_CHAIN_ID });
-      const wallet = remember(w.address as Address, w.signer.credential);
+      if (!hasWebAuthn()) throw unsupportedPasskeys("find");
+      let w: Awaited<ReturnType<Client["recoverFromPasskey"]>>;
+      try {
+        w = await sdkClient().recoverFromPasskey({ rpId: cfg.rpId, chainId: CELO_CHAIN_ID });
+      } catch (e) {
+        throw passkeyFailure(e, "find") ?? e;
+      }
+      // Found from the passkey alone, so it is discoverable.
+      const wallet = await remember(w.address as Address, w.signer.credential, true);
+      emit();
+      return wallet;
+    },
+    async getBackupCode() {
+      await reconcile();
+      const w = storedWallet();
+      if (!w) throw new Error("There is no wallet on this device yet.");
+      const cred = w.credential as WebAuthnCredential;
+      if (cred.kind !== "webauthn") throw new Error("This wallet's key is not a device passkey.");
+      return encodeBackupCode({ wallet: w.address, credentialId: cred.id, publicKey: cred.publicKey, rpId: cred.rpId ?? cfg.rpId, discoverable: discoverableOf(w) });
+    },
+    async restoreFromBackupCode(code: string) {
+      assertPasskeyOrigin();
+      const d = decodeBackupCode(code);
+      if (d.rpId !== cfg.rpId) {
+        throw new BackupCodeError(`This backup code is for a passkey on ${d.rpId}. This app uses passkeys on ${cfg.rpId}.`);
+      }
+      await reconcile();
+      const current = storedWallet();
+      if (current && current.address.toLowerCase() !== d.wallet.toLowerCase()) {
+        throw new Error(`This browser already holds another Autumn wallet (${current.address}). Nothing was changed.`);
+      }
+      await assertAdminKey(d.wallet, d.publicKey);
+      const credential: PasskeyCredential = { kind: "webauthn", id: d.credentialId, publicKey: d.publicKey, rpId: d.rpId };
+      const wallet = await remember(d.wallet, credential, d.discoverable);
+      last.balances = undefined;
+      last.view = undefined;
       emit();
       return wallet;
     },

@@ -20,6 +20,10 @@ import {
   type SendAsset,
 } from "@autumn/core";
 import { publicConfig } from "./env";
+import type { Discoverable } from "./passkey";
+
+export { PasskeyError, type PasskeyFailureReason, type PasskeyStep, type Discoverable } from "./passkey";
+export { BackupCodeError, BACKUP_CODE_PREFIX } from "./backupCode";
 
 export type { PlanPeriod, SendAsset };
 export { PLAN_DURATION_WEEKS };
@@ -49,7 +53,24 @@ export const agentScanUrl = (agentId: string) => `https://8004scan.io/agents/cel
 export interface Wallet {
   address: Address;
   createdAt: Date;
+  /** The wallet's passkey (its only admin). */
+  passkey: WalletPasskey;
 }
+
+/**
+ * Whether the passkey can be found again from the passkey alone.
+ * - true: a discoverable passkey; "I already have an Autumn passkey" finds the wallet (on any device the passkey syncs to).
+ * - false or "unknown" (the browser did not say): treat as device-bound. Only this browser's saved record, or the
+ *   wallet backup code (`getBackupCode`), can name it again, and only on this device. The UI should ask the owner to
+ *   save the backup code and keep small amounts.
+ */
+export interface WalletPasskey {
+  discoverable: Discoverable;
+}
+
+/** What the wallet backup code is, in plain words, for the screen that shows it. */
+export const BACKUP_CODE_TEXT =
+  "This code lets Autumn find your passkey again on this device if the browser's data is cleared. It contains no private key and cannot move funds. It only works on the device that holds the passkey: if this device is reset or the passkey is deleted, the wallet cannot be used again. Keep small amounts, and use \"Send out\" to move funds to an address you control.";
 
 export interface Balances {
   /** USD₮ in base units (6 decimals). */
@@ -256,10 +277,30 @@ export interface AutumnClient {
   getState(): Promise<AutumnState>;
   /** Called whenever state may have changed. Returns an unsubscribe function. */
   subscribe(onChange: () => void): () => void;
-  /** Create the wallet with a passkey. */
+  /**
+   * Create the wallet with a passkey. Rejects with a `PasskeyError` (`reason` and a short plain `message`) when the
+   * passkey prompt fails, is cancelled or passkeys are unsupported; other errors (relay, network) are plain Errors.
+   * Afterwards `wallet.passkey.discoverable` says whether the owner must save the backup code.
+   */
   createWallet(): Promise<Wallet>;
-  /** Find an existing wallet from a passkey saved on this device (works once the wallet has made a transaction). */
+  /**
+   * Find an existing wallet from a discoverable passkey saved on this device (works once the wallet has made a
+   * transaction). Rejects with a `PasskeyError` when the prompt fails. Cannot find a device-bound
+   * (non-discoverable) passkey: use `restoreFromBackupCode`.
+   */
   restoreWallet(): Promise<Wallet>;
+  /**
+   * The wallet backup code for the wallet on this device (see `BACKUP_CODE_TEXT`). No prompt, nothing signed.
+   * Rejects when there is no wallet.
+   */
+  getBackupCode(): Promise<string>;
+  /**
+   * Restore the wallet on this device from a backup code. Checks the code's format and checksum and that it is for
+   * this app's passkey domain, checks that the code's passkey is the wallet's admin key (on Celo once the wallet has
+   * transacted, otherwise in the Altana relay's record of the wallet's first transaction), then saves it and loads
+   * the wallet. No passkey prompt. Rejects with a `BackupCodeError` for a malformed code and a plain Error otherwise.
+   */
+  restoreFromBackupCode(code: string): Promise<Wallet>;
   /** Write the plan limits onchain and start the agent. */
   confirmPlan(input: PlanInput): Promise<Plan>;
   /** Revoke the agent onchain. Resolves once the chain shows the revoke. */

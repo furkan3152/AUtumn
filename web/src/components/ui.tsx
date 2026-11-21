@@ -2,10 +2,16 @@
 
 import { useState } from "react";
 import { encode } from "uqr";
-import { txUrl, type TxHash } from "@/lib/autumn";
+import { PasskeyError, txUrl, type TxHash, type Wallet } from "@/lib/autumn";
+import { errorText } from "@/lib/useAutumn";
+import { Icon, type IconName } from "./icons";
 
+/**
+ * A parchment panel. Its title hangs on a small wooden signboard with an icon.
+ */
 export function Panel({
   title,
+  icon,
   children,
   className = "",
   tone = "paper",
@@ -13,6 +19,7 @@ export function Panel({
   headingLevel = 2,
 }: {
   title?: string;
+  icon?: IconName;
   children: React.ReactNode;
   className?: string;
   tone?: "paper" | "alert" | "stopped";
@@ -21,10 +28,68 @@ export function Panel({
 }) {
   const H = headingLevel === 2 ? "h2" : "h3";
   return (
-    <Tag className={`frame frame--${tone} ${className}`}>
-      {title && <H className="frame__title">{title}</H>}
+    <Tag className={`frame frame--${tone} ${title ? "frame--titled" : ""} ${className}`}>
+      {title && (
+        <H className="plank">
+          {icon && <Icon name={icon} />}
+          <span>{title}</span>
+        </H>
+      )}
       {children}
     </Tag>
+  );
+}
+
+/** A screen's heading, on the page backdrop, with an optional Back button. */
+export function ScreenHead({ title, onBack, backDisabled }: { title: string; onBack?: (() => void) | undefined; backDisabled?: boolean }) {
+  return (
+    <div className="screen-head">
+      <h1>{title}</h1>
+      {onBack && (
+        <Button variant="plain" className="btn--small" onClick={onBack} disabled={backDisabled}>
+          Back
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** A label with its pixel icon, for fact lists and choices. */
+export function Label({ icon, children }: { icon: IconName; children: React.ReactNode }) {
+  return (
+    <span className="label">
+      <Icon name={icon} />
+      <span>{children}</span>
+    </span>
+  );
+}
+
+/** The ribbon banner that carries the main status. */
+export function Banner({ tone, children, level = 2 }: { tone: "running" | "busy" | "rest"; children: React.ReactNode; level?: 1 | 2 }) {
+  const H = level === 1 ? "h1" : "h2";
+  return (
+    <div className={`banner banner--${tone}`}>
+      <H className="banner__text">{children}</H>
+    </div>
+  );
+}
+
+const TRAIL = ["Create wallet", "Add money", "Choose a plan", "Gold arrives"] as const;
+
+/** Onboarding progress, drawn as a little path with waypoints. `at` is the current step (0-based). */
+export function Trail({ at }: { at: number }) {
+  return (
+    <ol className="trail" aria-label="Setup steps">
+      {TRAIL.map((t, i) => (
+        <li key={t} className={`trail__stop ${i < at ? "is-done" : i === at ? "is-here" : ""}`} aria-current={i === at ? "step" : undefined}>
+          <span className="trail__dot" aria-hidden="true" />
+          <span className="trail__name">
+            {t}
+            {i < at && <span className="sr-only"> (done)</span>}
+          </span>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -102,6 +167,68 @@ export function Qr({ value, label }: { value: string; label: string }) {
   );
 }
 
+/** A small lantern whose flame flickers: the busy indicator. */
 export function Spinner() {
-  return <span className="spinner" aria-hidden="true" />;
+  return (
+    <svg className="spinner" viewBox="0 0 7 11" shapeRendering="crispEdges" aria-hidden="true" focusable="false">
+      <rect x="2" y="0" width="3" height="1" fill="#2a1a10" />
+      <rect x="1" y="1" width="1" height="1" fill="#2a1a10" />
+      <rect x="5" y="1" width="1" height="1" fill="#2a1a10" />
+      <rect x="0" y="2" width="7" height="9" fill="#2a1a10" />
+      <rect x="1" y="3" width="5" height="1" fill="#9a6034" />
+      <rect x="1" y="9" width="5" height="1" fill="#9a6034" />
+      <rect x="1" y="4" width="5" height="5" fill="#f2a83a" />
+      <g className="spinner__flame">
+        <rect x="3" y="4" width="1" height="1" fill="#fff4c4" />
+        <rect x="2" y="5" width="3" height="3" fill="#ffe27a" />
+        <rect x="3" y="6" width="1" height="1" fill="#fffbe8" />
+      </g>
+    </svg>
+  );
+}
+
+/**
+ * A failure from an action. A failed passkey step gets a clear panel with its
+ * plain message and a Retry button; any other error is a short red line.
+ */
+export function FailureNotice({ error, onRetry, prefix = "" }: { error: unknown; onRetry?: () => void; prefix?: string }) {
+  if (error === null || error === undefined) return null;
+  if (error instanceof PasskeyError) {
+    return (
+      <div className="failure" role="alert">
+        <p className="failure__title">
+          <Icon name="passkey" /> The passkey step did not finish
+        </p>
+        <p>{error.message}</p>
+        {error.reason === "unsupported" && <p className="failure__hint">On Android, open this page in Chrome.</p>}
+        {onRetry && (
+          <Button variant="plain" className="btn--small" onClick={onRetry}>
+            Retry
+          </Button>
+        )}
+      </div>
+    );
+  }
+  return (
+    <p className="error-text" role="alert">
+      {prefix}
+      {errorText(error)}
+    </p>
+  );
+}
+
+/** True when the wallet's passkey may be device-bound, so the backup code matters. */
+export const isDeviceBound = (w: Wallet | null | undefined) => !!w && w.passkey.discoverable !== true;
+
+/** The reminder chip for a device-bound passkey, with a way to see the backup code again. */
+export function BackupChip({ onBackupCode }: { onBackupCode: () => void }) {
+  return (
+    <p className="chip">
+      <Icon name="passkey" />
+      <span>Passkey lives on this device only.</span>
+      <button type="button" className="chip__btn" onClick={onBackupCode}>
+        Backup code
+      </button>
+    </p>
+  );
 }

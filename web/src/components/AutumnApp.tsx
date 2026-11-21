@@ -4,17 +4,19 @@ import { useEffect, useState } from "react";
 import { isFunded, type AutumnClient, type AutumnState } from "@/lib/autumn";
 import { useAutumn } from "@/lib/useAutumn";
 import { Logo } from "./Logo";
-import { Button, Panel, Spinner } from "./ui";
+import { Button, FailureNotice, Panel, Spinner } from "./ui";
+import { Icon } from "./icons";
 import { Landing } from "./screens/Landing";
 import { Deposit } from "./screens/Deposit";
 import { PlanPicker } from "./screens/PlanPicker";
 import { Home } from "./screens/Home";
 import { SendOut } from "./screens/SendOut";
+import { BackupCode } from "./screens/BackupCode";
 import { errorText } from "@/lib/useAutumn";
 import { TxLink } from "./ui";
 import type { TxHash } from "@/lib/autumn";
 
-type View = "auto" | "deposit" | "plan" | "send";
+type View = "auto" | "deposit" | "plan" | "send" | "backup" | "backup-new";
 
 export function AutumnApp() {
   const load = useAutumn();
@@ -29,6 +31,7 @@ export function AutumnApp() {
           </div>
         </>
       )}
+      <Backdrop />
       <Header />
       <main className="main" id="main">
         {load.status === "loading" && <Loading />}
@@ -56,6 +59,17 @@ function Header() {
   );
 }
 
+/** Falling-leaf accents at the edges of the page. Decorative. */
+function Backdrop() {
+  return (
+    <div className="backdrop" aria-hidden="true">
+      {Array.from({ length: 10 }, (_, i) => (
+        <span key={i} className={`bleaf bleaf--${i}`} />
+      ))}
+    </div>
+  );
+}
+
 function Ready({ client, state }: { client: AutumnClient; state: AutumnState }) {
   const [view, setView] = useState<View>("auto");
   const back = () => setView("auto");
@@ -64,7 +78,19 @@ function Ready({ client, state }: { client: AutumnClient; state: AutumnState }) 
     window.scrollTo(0, 0);
   }, [view]);
 
-  if (!state.wallet) return <Landing client={client} price={state.price} registration={state.registration} fees={state.fees} notices={state.notices} />;
+  if (!state.wallet)
+    return (
+      <Landing
+        client={client}
+        price={state.price}
+        registration={state.registration}
+        fees={state.fees}
+        notices={state.notices}
+        onCreated={(w) => {
+          if (w.passkey.discoverable !== true) setView("backup-new");
+        }}
+      />
+    );
 
   const hasPlan = state.plan !== null;
 
@@ -93,13 +119,25 @@ function Screen({
   hasPlan: boolean;
 }) {
   const onSendOut = () => setView("send");
+  const onBackupCode = () => setView("backup");
+  if (view === "backup-new") return <BackupCode client={client} onDone={back} />;
+  if (view === "backup") return <BackupCode client={client} onDone={back} onBack={back} />;
   if (view === "send") return <SendOut client={client} state={state} onBack={back} {...(state.plan ? { goldBuyer: state.plan.proof.calls[1]!.contract } : {})} />;
-  if (view === "deposit") return <Deposit state={state} onBack={back} onSendOut={onSendOut} />;
+  if (view === "deposit") return <Deposit state={state} onBack={back} onSendOut={onSendOut} onBackupCode={onBackupCode} />;
   if (view === "plan" && isFunded(state)) return <PlanPicker client={client} state={state} onDone={back} onBack={back} />;
-  if (view === "plan") return <Deposit state={state} onContinue={() => setView("plan")} onBack={back} onSendOut={onSendOut} />;
-  if (!hasPlan) return <Deposit state={state} onContinue={() => setView("plan")} onSendOut={onSendOut} />;
+  if (view === "plan") return <Deposit state={state} onContinue={() => setView("plan")} onBack={back} onSendOut={onSendOut} onBackupCode={onBackupCode} />;
+  if (!hasPlan) return <Deposit state={state} onContinue={() => setView("plan")} onSendOut={onSendOut} onBackupCode={onBackupCode} />;
 
-  return <Home client={client} state={state} onAddMoney={() => setView("deposit")} onNewPlan={() => setView("plan")} onSendOut={onSendOut} />;
+  return (
+    <Home
+      client={client}
+      state={state}
+      onAddMoney={() => setView("deposit")}
+      onNewPlan={() => setView("plan")}
+      onSendOut={onSendOut}
+      onBackupCode={onBackupCode}
+    />
+  );
 }
 
 export function Notices({ notices }: { notices: string[] }) {
@@ -118,8 +156,8 @@ export function Notices({ notices }: { notices: string[] }) {
 /** Shown when the app has no wallet connection configured and is not the preview. */
 function NotLive() {
   return (
-    <Panel title="Autumn is not live yet" className="narrow">
-      <p>Autumn will buy a little tokenized gold for you on Celo, within limits you set. It is not open yet.</p>
+    <Panel title="Autumn is not live yet" icon="hourglass" className="narrow center-panel">
+      <p className="lead-text">Autumn will buy a little tokenized gold for you on Celo, within limits you set. It is not open yet.</p>
       <p className="muted">Please come back soon.</p>
     </Panel>
   );
@@ -128,7 +166,7 @@ function NotLive() {
 /** An agent key that is live onchain but runs no plan: the owner is asked to revoke it. */
 function StrayKey({ client, stray }: { client: AutumnClient; stray: NonNullable<AutumnState["strayKey"]> }) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [done, setDone] = useState<{ txHash?: TxHash } | null>(null);
   const revoke = async () => {
     setBusy(true);
@@ -136,14 +174,14 @@ function StrayKey({ client, stray }: { client: AutumnClient; stray: NonNullable<
     try {
       setDone(await client.revokeStrayKey());
     } catch (e) {
-      setError(errorText(e));
+      setError(e);
     } finally {
       setBusy(false);
     }
   };
   return (
     <div className="narrow">
-    <Panel title="An unused agent key is still live" tone="alert">
+    <Panel title="An unused agent key is still live" icon="key" tone="alert">
       <p>
         Your wallet granted an agent key that no plan is using: {stray.reason}. It can still spend within the limits it
         was granted until it expires. Revoke it to be safe. Your passkey approves this and it costs a small fee.
@@ -164,11 +202,7 @@ function StrayKey({ client, stray }: { client: AutumnClient; stray: NonNullable<
           )}
         </Button>
       )}
-      {error && (
-        <p className="error-text" role="alert">
-          {error}
-        </p>
-      )}
+      <FailureNotice error={error} onRetry={revoke} />
     </Panel>
     </div>
   );
@@ -176,18 +210,27 @@ function StrayKey({ client, stray }: { client: AutumnClient; stray: NonNullable<
 
 function Loading() {
   return (
-    <div className="center-state" role="status">
-      <Spinner />
-      <p>Loading your wallet…</p>
+    <div className="loading" role="status">
+      <div className="loading__lantern" aria-hidden="true">
+        <Spinner />
+      </div>
+      <p className="loading__text">Loading your wallet…</p>
+      <div className="skeleton" aria-hidden="true">
+        <span className="skeleton__scene" />
+        <span className="skeleton__line" />
+        <span className="skeleton__line skeleton__line--short" />
+      </div>
     </div>
   );
 }
 
 function LoadError({ message, retry }: { message: string; retry: () => void }) {
   return (
-    <Panel title="Could not load your wallet" tone="alert" className="narrow">
-      <p>{message}</p>
-      <p className="muted">Your funds are not affected. This page only reads from Celo.</p>
+    <Panel title="Could not load your wallet" icon="no" tone="alert" className="narrow center-panel">
+      <p className="lead-text">{message}</p>
+      <p className="muted with-icon">
+        <Icon name="shield" /> Your funds are not affected. This page only reads from Celo.
+      </p>
       <Button onClick={retry}>Try again</Button>
     </Panel>
   );

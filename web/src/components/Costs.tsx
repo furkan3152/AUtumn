@@ -2,6 +2,7 @@
 
 import { DECIMALS, PLAN_DURATION_WEEKS, suggestedDeposit, type FeeFacts, type Registration } from "@/lib/autumn";
 import { approxUsd, celo, usdt } from "@/lib/format";
+import { Icon } from "./icons";
 
 const DEFAULT_AMOUNT = 5n * 10n ** BigInt(DECIMALS.USDT);
 
@@ -21,11 +22,16 @@ export function CostsList({ registration, fees }: { registration: Registration |
   return (
     <ul className="send-list">
       <li>
+        <Icon name="note" />
+        <span>
         <strong>USD₮ for the gold.</strong> <span className="num">$5</span> a week for <span className="num">{PLAN_DURATION_WEEKS}</span> weeks needs about{" "}
         <span className="num">{usdt(suggestedDeposit(DEFAULT_AMOUNT, "week"))}</span> USD₮, fee allowance included. Any amount works: the agent skips a
         purchase when the balance runs out.
+        </span>
       </li>
       <li>
+        <Icon name="token" />
+        <span>
         <strong>CELO for Altana&apos;s registration.</strong>{" "}
         {first !== null && later !== null && registration ? (
           registration.walletRegistered ? (
@@ -41,11 +47,21 @@ export function CostsList({ registration, fees }: { registration: Registration |
         ) : (
           <>The amount is read from Celo when your wallet is open.</>
         )}
+        </span>
       </li>
-      <li>Starting a plan asks for your passkey twice: once to grant the agent its limits, once for its onchain identity (ERC-8004).</li>
-      <li>Stopping the agent, and sending funds out, each need a passkey approval and a small network fee.</li>
       <li>
-        <strong>You can send your funds out at any time</strong>, whether the agent is running or stopped.
+        <Icon name="passkey" />
+        <span>Starting a plan asks for your passkey twice: once to grant the agent its limits, once for its onchain identity (ERC-8004).</span>
+      </li>
+      <li>
+        <Icon name="seal" />
+        <span>Stopping the agent, and sending funds out, each need a passkey approval and a small network fee.</span>
+      </li>
+      <li>
+        <Icon name="send" />
+        <span>
+          <strong>You can send your funds out at any time</strong>, whether the agent is running or stopped.
+        </span>
       </li>
     </ul>
   );

@@ -16,8 +16,9 @@ import {
 } from "@/lib/autumn";
 import { approxUsd, bpsPercent, celo, formatDate, usdt, usdtFine } from "@/lib/format";
 import { celoInUsdt } from "../Costs";
-import { errorText } from "@/lib/useAutumn";
-import { Button, Panel, Spinner } from "../ui";
+import { Button, FailureNotice, Label, Panel, ScreenHead, Spinner, Trail } from "../ui";
+import { Icon } from "../icons";
+import { Sprite } from "../pixel";
 
 const UNIT = 10n ** BigInt(DECIMALS.USDT);
 
@@ -36,7 +37,7 @@ export function PlanPicker({
   const [period, setPeriod] = useState<PlanPeriod>("week");
   const [dip, setDip] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const name = useId();
   const freqName = useId();
 
@@ -58,42 +59,41 @@ export function PlanPicker({
       await client.confirmPlan({ amount: each, period, buyTheDip: dip, expiresAt: limits.expiresAt });
       onDone();
     } catch (e) {
-      setError(errorText(e));
+      setError(e);
       setBusy(false);
     }
   };
 
   return (
-    <div className="stack narrow">
-      <div className="screen-head">
-        <h1>Choose a plan</h1>
-        {onBack && (
-          <Button variant="plain" className="btn--small" onClick={onBack} disabled={busy}>
-            Back
-          </Button>
-        )}
-      </div>
+    <div className="screen plan">
+      <ScreenHead title="Choose a plan" onBack={onBack} backDisabled={busy} />
+      {state.plan === null && <Trail at={2} />}
 
-      <Panel>
+      <Panel className="plan__choose">
         <fieldset className="presets">
-          <legend className="frame__title">How often</legend>
-          <div className="presets__row presets__row--two">
+          <legend className="legend">
+            <Icon name="calendar" /> How often
+          </legend>
+          <div className="segmented">
             {(["week", "day"] as const).map((p) => (
-              <label key={p} className={`preset ${period === p ? "is-on" : ""}`}>
+              <label key={p} className={`segment ${period === p ? "is-on" : ""}`}>
                 <input type="radio" name={freqName} value={p} checked={period === p} onChange={() => setPeriod(p)} />
-                <span className="preset__amount">{p === "week" ? "Weekly" : "Daily"}</span>
-                <span className="preset__unit">{p === "week" ? "resets Monday 00:00 UTC" : "resets 00:00 UTC"}</span>
+                <span className="segment__name">{p === "week" ? "Weekly" : "Daily"}</span>
+                <span className="segment__note">{p === "week" ? "resets Monday 00:00 UTC" : "resets 00:00 UTC"}</span>
               </label>
             ))}
           </div>
         </fieldset>
 
         <fieldset className="presets">
-          <legend className="frame__title">Gold to buy every {per}</legend>
+          <legend className="legend">
+            <Icon name="coin" /> Gold to buy every {per}
+          </legend>
           <div className="presets__row">
-            {PLAN_PRESETS_USDT.map((p) => (
+            {PLAN_PRESETS_USDT.map((p, i) => (
               <label key={p} className={`preset ${amount === p ? "is-on" : ""}`}>
                 <input type="radio" name={name} value={p} checked={amount === p} onChange={() => setAmount(p)} />
+                <CoinPile size={i + 1} />
                 <span className="preset__amount">${p}</span>
                 <span className="preset__unit">per {per}</span>
               </label>
@@ -113,12 +113,15 @@ export function PlanPicker({
         </label>
       </Panel>
 
-      <Panel title="Limits written onchain">
+      <div className="plan__info stack">
+      <Panel title="Limits written onchain" icon="shield">
         <dl className="facts">
           <div>
-            <dt>{daily ? "Daily" : "Weekly"} limit</dt>
+            <dt>
+              <Label icon="pouch">{daily ? "Daily" : "Weekly"} limit</Label>
+            </dt>
             <dd>
-              <span className="num">{usdt(limits.cap)} USD₮</span> per {per}, including{" "}
+              <span className="num num--key">{usdt(limits.cap)} USD₮</span> per {per}, including{" "}
               <span className="num">{usdt(limits.feeAllowance)}</span> USD₮ for network fees. Resets{" "}
               {daily ? (
                 <>
@@ -133,27 +136,35 @@ export function PlanPicker({
             </dd>
           </div>
           <div>
-            <dt>Allowed</dt>
+            <dt>
+              <Label icon="shield">Allowed</Label>
+            </dt>
             <dd>{LIMITS_TEXT} GoldBuyer sends the gold (XAUt0) only to your wallet.</dd>
           </div>
           <div>
-            <dt>Ends</dt>
+            <dt>
+              <Label icon="hourglass">Ends</Label>
+            </dt>
             <dd>
               <span className="num">{formatDate(limits.expiresAt)}</span>, after <span className="num">{PLAN_DURATION_WEEKS}</span> weeks.
               The agent cannot spend after that.
             </dd>
           </div>
           <div>
-            <dt>Stop</dt>
+            <dt>
+              <Label icon="lock">Stop</Label>
+            </dt>
             <dd>Any time, with a passkey approval and a small network fee</dd>
           </div>
         </dl>
       </Panel>
 
-      <Panel title="What it costs">
+      <Panel title="What it costs" icon="coin">
         <dl className="facts">
           <div>
-            <dt>Each buy</dt>
+            <dt>
+              <Label icon="coin">Each buy</Label>
+            </dt>
             <dd>
               {cost ? (
                 <>
@@ -172,7 +183,9 @@ export function PlanPicker({
             </dd>
           </div>
           <div>
-            <dt>Setup</dt>
+            <dt>
+              <Label icon="token">Setup</Label>
+            </dt>
             <dd>
               {feeDue ? (
                 <>
@@ -186,7 +199,9 @@ export function PlanPicker({
             </dd>
           </div>
           <div>
-            <dt>Full plan</dt>
+            <dt>
+              <Label icon="calendar">Full plan</Label>
+            </dt>
             <dd>
               <span className="num">{usdt(fullPlan)}</span> USD₮ covers all <span className="num">{daily ? PLAN_DURATION_WEEKS * 7 : PLAN_DURATION_WEEKS}</span> buys
               {dip ? " (dip buys come on top)" : ""}.
@@ -205,7 +220,9 @@ export function PlanPicker({
           {" "}Confirming asks for your passkey twice: once for the limits, once for the agent&apos;s identity (ERC-8004).
         </p>
       </Panel>
+      </div>
 
+      <div className="plan__act">
       <Button block onClick={confirm} disabled={busy}>
         {busy ? (
           <>
@@ -217,11 +234,24 @@ export function PlanPicker({
           </>
         )}
       </Button>
-      {error && (
-        <p className="error-text" role="alert">
-          {error}
-        </p>
-      )}
+      <FailureNotice error={error} onRetry={confirm} />
+      </div>
     </div>
+  );
+}
+
+const PILE_PAL = { k: "#7a4e10", y: "#f2bf3a", l: "#ffe58a", d: "#c98f1e" };
+
+/** A small pile of coins: one, a few, or many, matching the amount. Decorative. */
+function CoinPile({ size }: { size: number }) {
+  const coin = [".kkkk.", "klllyk", "kyyyyk", "kddddk", ".kkkk."];
+  const spots: [number, number][] =
+    size === 1 ? [[7, 9]] : size === 2 ? [[3, 9], [10, 9], [7, 5]] : [[0, 9], [6, 9], [12, 9], [3, 5], [9, 5], [6, 1]];
+  return (
+    <svg className="pile" viewBox="0 0 18 14" shapeRendering="crispEdges" aria-hidden="true" focusable="false">
+      {spots.map(([x, y], i) => (
+        <Sprite key={i} rows={coin} palette={PILE_PAL} x={x} y={y} />
+      ))}
+    </svg>
   );
 }

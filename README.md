@@ -116,6 +116,34 @@ If the domain itself is lost (for example it expires and someone else takes
 it), the passkey cannot be used by a website any more. That is a property of
 passkeys, not something Autumn can work around. Move funds out while you can.
 
+## Device-bound passkeys and the wallet backup code
+
+Autumn asks for a passkey with `residentKey: "preferred"` (the Altana SDK
+asks for `"required"`; `web/src/lib/passkey.ts` changes only that and
+`requireResidentKey`, and keeps user verification required). On some Android
+phones Google Password Manager cannot store a discoverable passkey; with
+"required" Chrome then offers only "Create a passkey on another device?".
+With "preferred" such a phone creates a **device-bound** passkey instead: it
+lives on that phone, and the phone uses it only when the site names its
+credential id. A phone that can store a discoverable passkey still makes one,
+as before.
+
+A device-bound passkey cannot be found from the passkey alone, so "I already
+have an Autumn passkey" cannot find its wallet. Autumn keeps the passkey's
+credential id in the browser twice (localStorage and IndexedDB), and offers a
+**wallet backup code** (`autumn1-…`).
+
+- What it is: a checksummed text with the wallet address, the passkey's
+  credential id, its public key and the passkey domain. Restoring from it
+  checks that the code's key is the wallet's admin key (on Celo once the
+  wallet has transacted, otherwise in the Altana relay's record of the
+  wallet's first transaction) before using it.
+- What it is not: it holds no private key and cannot sign or move funds.
+- It works only on the device that holds the passkey. If that device is
+  reset or the passkey is deleted, the wallet cannot sign again and its funds
+  are lost; no code can help. Keep small amounts in such a wallet, and use
+  "Send out" to move funds to an address you control.
+
 ## Layout
 
 | Path | Contents |
