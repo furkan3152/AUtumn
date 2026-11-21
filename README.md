@@ -188,6 +188,14 @@ mainnet. Reading needs no funds. A plan needs a funded wallet; see
    cd ../web && npm test && npm run typecheck
    ```
 
+### Running as a Node server
+
+`npm run build && npm start` in `web/` serves the same app from any Node host.
+The live deployment at https://autumn-gold.onrender.com runs this way. Such a
+host needs something to call the purchase tick: set `AUTUMN_SCHEDULER=internal`
+to run it in-process once per UTC hour, or call `/api/cron/tick` from a
+scheduler with the `CRON_SECRET` header.
+
 ### Deploying on Cloudflare
 
 The app runs as one Cloudflare Worker, `autumn`, built with the OpenNext
