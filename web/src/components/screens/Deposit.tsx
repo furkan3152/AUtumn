@@ -2,16 +2,19 @@
 
 import { addressUrl, isFunded, type AutumnState } from "@/lib/autumn";
 import { celo, formatDateTime, usdt } from "@/lib/format";
-import { Button, CopyButton, Panel, Qr, Spinner } from "../ui";
+import { CostsList } from "../Costs";
+import { Button, CopyButton, ExtLink, Panel, Qr, Spinner } from "../ui";
 
 export function Deposit({
   state,
   onContinue,
   onBack,
+  onSendOut,
 }: {
   state: AutumnState;
   onContinue?: () => void;
   onBack?: () => void;
+  onSendOut?: () => void;
 }) {
   const wallet = state.wallet!;
   const b = state.balances;
@@ -42,32 +45,18 @@ export function Deposit({
               ))}
             </p>
             <div className="row">
-              <CopyButton text={wallet.address} label="Copy address" />
-              <a className="txlink" href={addressUrl(wallet.address)} target="_blank" rel="noopener noreferrer">
-                View on Celoscan<span className="sr-only"> (opens in a new tab)</span>
-              </a>
+              <CopyButton text={wallet.address} label="Copy address" what="wallet address" />
+              <ExtLink href={addressUrl(wallet.address)} label="View your wallet address on Celoscan">
+                View on Celoscan
+              </ExtLink>
             </div>
           </div>
         </div>
       </Panel>
 
       <Panel title="What to send">
-        <ul className="send-list">
-          <li>
-            <strong>USD₮</strong> on the Celo network. This is the money used to buy gold.
-          </li>
-          {needsFee && reg && (
-            <li>
-              <strong>
-                About <span className="num">{celo(reg.nextGrantFeeCelo)}</span> CELO.
-              </strong>{" "}
-              It pays Altana&apos;s registration fee when you confirm a plan:{" "}
-              {reg.walletRegistered ? "once for the agent's new key." : "once for your wallet and once for the agent's key."} Any excess
-              is refunded.
-            </li>
-          )}
-        </ul>
-        <p className="note">Send on Celo only. Funds sent on another network may be lost.</p>
+        <CostsList registration={reg} fees={state.fees} />
+        <p className="note">Send on the Celo network only. Funds sent on another network may be lost.</p>
       </Panel>
 
       <Panel title="Balances">
@@ -102,6 +91,12 @@ export function Deposit({
           </>
         )}
       </Panel>
+
+      {onSendOut && (b?.usdt || b?.gold || b?.celo) ? (
+        <Button variant="plain" block onClick={onSendOut}>
+          Send funds out
+        </Button>
+      ) : null}
 
       {funded && onContinue ? (
         <Button block onClick={onContinue}>

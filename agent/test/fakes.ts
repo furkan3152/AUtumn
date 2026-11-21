@@ -11,7 +11,6 @@ import {
   USDT,
   nextPeriodStart,
   periodStart,
-  weekStart,
   type Balances,
   type PlanPeriod,
   type TxFacts,
@@ -47,6 +46,7 @@ export class FakeChain implements ChainReader {
   /** Receipts for grant/revoke transactions, by hash. */
   txs = new Map<string, TxFacts>();
   quoteTwap = true;
+  superAdmin = false;
 
   constructor(now: number) {
     this.now = now;
@@ -79,7 +79,7 @@ export class FakeChain implements ChainReader {
       : [];
     return {
       status: this.status, keyId, keyHash, keyStoreValid: on, onAccount: on,
-      ...(on ? { accountExpiry: this.expiry } : {}),
+      ...(on ? { accountExpiry: this.expiry, keyType: 2, isSuperAdmin: this.superAdmin } : {}),
       spend, allowedCalls: on ? this.allowedCalls : [],
       ...(on
         ? { usdtCap: { period: this.period, limit: this.cap, spent: this.spent, remaining: this.cap > this.spent ? this.cap - this.spent : 0n, periodStart: ps, resetsAt: nextPeriodStart(this.now, this.period) } }
@@ -90,9 +90,11 @@ export class FakeChain implements ChainReader {
   async balances(_wallet: Address): Promise<Balances> {
     return { usdt: this.usdt, xaut0: 0n, celo: 0n, blockNumber: this.block };
   }
-  async purchasesInWeek(at: number): Promise<Purchase[]> {
-    const ws = weekStart(at);
-    return this.purchases.filter((p) => p.timestamp >= ws && p.timestamp < ws + 604_800 && p.timestamp <= this.now);
+  /** Earliest `since` asked for, and how many scans ran: the runner reads only from what it needs. */
+  scans: number[] = [];
+  async purchasesSince(since: number): Promise<Purchase[]> {
+    this.scans.push(since);
+    return this.purchases.filter((p) => p.timestamp >= since && p.timestamp <= this.now);
   }
   async txFacts(txHash: Hex, _wallet: Address): Promise<TxFacts | null> {
     return this.txs.get(txHash.toLowerCase()) ?? null;
@@ -125,11 +127,35 @@ export class FakeExecutor implements SessionExecutor {
   calls: ExecCall[] = [];
   behaviour: "confirm" | "throw-landed" | "throw-lost" | "pending-lost" | ((c: ExecCall) => Promise<ExecuteResult>) = "confirm";
   delayMs = 0;
+  /** What the relay quotes as its fee (USD₮ base units), or a function that throws. */
+  fee: bigint | (() => Promise<{ fee: bigint; feeToken: Address }>) = 3_000n;
+  quotes = 0;
+  /** Calls currently inside execute, per wallet, and the most seen at once. */
+  inFlight = new Map<string, number>();
+  maxInFlightPerWallet = 0;
+  maxInFlight = 0;
 
   constructor(private readonly chain: FakeChain) {}
 
+  async quote(_c: ExecCall): Promise<{ fee: bigint; feeToken: Address }> {
+    this.quotes++;
+    return typeof this.fee === "function" ? this.fee() : { fee: this.fee, feeToken: getAddress(USDT) };
+  }
+
   async execute(c: ExecCall): Promise<ExecuteResult> {
     this.calls.push(c);
+    const w = c.session.walletAddress.toLowerCase();
+    this.inFlight.set(w, (this.inFlight.get(w) ?? 0) + 1);
+    this.maxInFlightPerWallet = Math.max(this.maxInFlightPerWallet, this.inFlight.get(w)!);
+    this.maxInFlight = Math.max(this.maxInFlight, [...this.inFlight.values()].reduce((a, b) => a + b, 0));
+    try {
+      return await this.run(c);
+    } finally {
+      this.inFlight.set(w, this.inFlight.get(w)! - 1);
+    }
+  }
+
+  private async run(c: ExecCall): Promise<ExecuteResult> {
     if (this.delayMs) await new Promise((r) => setTimeout(r, this.delayMs));
     const { amountIn, minOut } = decodeBuyCalls(c.calls, GOLD_BUYER);
     const out = this.chain.quoteOut * amountIn / 5_000_000n;

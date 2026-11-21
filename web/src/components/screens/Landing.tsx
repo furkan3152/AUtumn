@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import type { AutumnClient, GoldPrice } from "@/lib/autumn";
+import { CUSTODY_TEXT, LIMITS_TEXT, type AutumnClient, type FeeFacts, type GoldPrice, type Registration } from "@/lib/autumn";
 import { formatDateTime, perGram, usdt } from "@/lib/format";
 import { errorText } from "@/lib/useAutumn";
 import { Logo } from "../Logo";
 import { Scene } from "../Scene";
+import { CostsList } from "../Costs";
 import { Button, Panel, Spinner } from "../ui";
 
 const STEPS = [
@@ -15,20 +16,25 @@ const STEPS = [
     title: "Choose a plan",
     body: (
       <>
-        For example, <span className="num">$5</span> of gold every week. You can stop it with one tap.
+        For example, <span className="num">$5</span> of gold every week. You can stop it at any time with your passkey.
       </>
     ),
   },
 ];
 
-type LandingProps = { price: GoldPrice | null; notices?: string[] } & ({ connected: false } | { connected: true; client: AutumnClient });
+type LandingProps = {
+  client: AutumnClient;
+  price: GoldPrice | null;
+  registration: Registration | null;
+  fees: FeeFacts | null;
+  notices?: string[];
+};
 
 export function Landing(props: LandingProps) {
   const [busy, setBusy] = useState<null | "create" | "restore">(null);
   const [error, setError] = useState<string | null>(null);
 
   const run = async (kind: "create" | "restore") => {
-    if (!props.connected) return;
     setBusy(kind);
     setError(null);
     try {
@@ -48,8 +54,8 @@ export function Landing(props: LandingProps) {
         </div>
         <p className="lede">A little gold every week. Never more than you allow.</p>
         <p className="pitch">
-          A helper buys Tether Gold for you with USD₮ on Celo, only within limits written onchain, and you can stop it
-          any time.
+          A helper buys Tether Gold for you with USD₮ on Celo, on a schedule. Unlike an exchange&apos;s recurring buy, the gold
+          sits in a wallet only you control, and the agent&apos;s limits are public and enforced onchain.
         </p>
         {props.price && (
           <p className="muted small landing__price">
@@ -82,38 +88,38 @@ export function Landing(props: LandingProps) {
         ))}
       </ol>
 
-      {props.connected ? (
-        <div className="cta">
-          <Button block onClick={() => run("create")} disabled={busy !== null}>
-            {busy === "create" ? (
-              <>
-                <Spinner /> Waiting for your passkey…
-              </>
-            ) : (
-              "Create wallet with passkey"
-            )}
-          </Button>
-          <Button variant="plain" block onClick={() => run("restore")} disabled={busy !== null}>
-            {busy === "restore" ? (
-              <>
-                <Spinner /> Waiting for your passkey…
-              </>
-            ) : (
-              "I already have an Autumn passkey"
-            )}
-          </Button>
-          {error && (
-            <p className="error-text" role="alert">
-              {error}
-            </p>
+      <Panel title="Before you start">
+        <CostsList registration={props.registration} fees={props.fees} />
+        <p className="callout">
+          {CUSTODY_TEXT} {LIMITS_TEXT}
+        </p>
+      </Panel>
+
+      <div className="cta">
+        <Button block onClick={() => run("create")} disabled={busy !== null}>
+          {busy === "create" ? (
+            <>
+              <Spinner /> Waiting for your passkey…
+            </>
+          ) : (
+            "Create wallet with passkey"
           )}
-        </div>
-      ) : (
-        <Panel title="Not connected yet" tone="alert">
-          <p>This version of Autumn is not connected to a wallet or to Celo yet, so there is nothing to show.</p>
-          <p className="muted">No balances, prices or purchases are displayed until the connection is added.</p>
-        </Panel>
-      )}
+        </Button>
+        <Button variant="plain" block onClick={() => run("restore")} disabled={busy !== null}>
+          {busy === "restore" ? (
+            <>
+              <Spinner /> Waiting for your passkey…
+            </>
+          ) : (
+            "I already have an Autumn passkey"
+          )}
+        </Button>
+        {error && (
+          <p className="error-text" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
     </div>
   );
 }

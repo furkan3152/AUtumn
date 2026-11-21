@@ -62,6 +62,24 @@ export class MemoryStorage implements Storage {
     ).length;
   }
 
+  async deletePendingPlansBefore(walletAddress: Address, before: number): Promise<number> {
+    const w = walletAddress.toLowerCase();
+    let n = 0;
+    for (const p of [...this.plans.values()]) {
+      if (p.walletAddress.toLowerCase() === w && p.status === "pending_grant" && p.createdAt < before) {
+        this.plans.delete(p.id);
+        this.keys.delete(p.id);
+        n++;
+      }
+    }
+    return n;
+  }
+
+  async countPlans(walletAddress: Address): Promise<number> {
+    const w = walletAddress.toLowerCase();
+    return [...this.plans.values()].filter((p) => p.walletAddress.toLowerCase() === w).length;
+  }
+
   async activatePlan(planId: string, session: SerializedSession, grantTxHash?: Hex): Promise<void> {
     const p = this.plans.get(planId);
     if (!p || p.status !== "pending_grant") throw new Error("plan is not waiting for a grant");

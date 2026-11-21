@@ -11,15 +11,17 @@
  *   Autumn server, when the public settings in `env.ts` are present.
  */
 import {
+  ALTANA_EXPLORER,
   DEFAULT_FEE_ALLOWANCE_PER_BUY,
   PLAN_DURATION_SECS,
   PLAN_DURATION_WEEKS,
   nextPeriodStart,
   type PlanPeriod,
+  type SendAsset,
 } from "@autumn/core";
 import { publicConfig } from "./env";
 
-export type { PlanPeriod };
+export type { PlanPeriod, SendAsset };
 export { PLAN_DURATION_WEEKS };
 
 export type Address = `0x${string}`;
@@ -37,6 +39,12 @@ export const GRAMS_PER_TROY_OUNCE = 31.1034768;
 export const CELO_EXPLORER = "https://celoscan.io";
 export const txUrl = (hash: TxHash) => `${CELO_EXPLORER}/tx/${hash}`;
 export const addressUrl = (address: Address) => `${CELO_EXPLORER}/address/${address}`;
+/** A wallet's page on Altana's Keystore explorer: its keys and their state. */
+export const keystoreAccountUrl = (address: Address) => `${ALTANA_EXPLORER}/account/${address}`;
+/** A key's page on Altana's Keystore explorer (key id = keccak256 of the public key). */
+export const keystoreKeyUrl = (keyId: `0x${string}`) => `${ALTANA_EXPLORER}/key/${keyId}`;
+/** An ERC-8004 agent's page on 8004scan (the URL the Altana SDK uses for Celo). */
+export const agentScanUrl = (agentId: string) => `https://8004scan.io/agents/celo/${agentId}`;
 
 export interface Wallet {
   address: Address;
@@ -63,6 +71,17 @@ export interface Registration {
    * KeyStore refunds.
    */
   nextGrantFeeCelo: bigint;
+  /** The registration fee for one key now, with the same 10% headroom: what each later plan sends. */
+  perKeyFeeCelo: bigint;
+}
+
+/** Prices for showing fees in dollars, read from Celo. */
+export interface FeeFacts {
+  /** USD₮ base units per 1 CELO (Celo's fee-currency directory). */
+  usdtPerCelo: bigint;
+  /** Estimated relay fee for one purchase, USD₮ base units (gas price × an assumed gas use). */
+  relayFeeEstimate: bigint;
+  observedAt: Date;
 }
 
 export interface GoldPrice {
@@ -83,7 +102,7 @@ export interface PlanInput {
   amount: bigint;
   /** How often: every week (default) or every day. */
   period: PlanPeriod;
-  /** Buy once more in the same period if gold drops 2% after that period's buy. */
+  /** One extra buy if the price is at least 2% below this period's purchase price. */
   buyTheDip: boolean;
   /** The plan's end, exactly as shown on the plan screen. */
   expiresAt: Date;
@@ -116,6 +135,17 @@ export interface Plan {
   limits: Limits;
   /** Transaction that wrote the limits onchain, when known. */
   txHash?: TxHash;
+  /** What anyone can check onchain about the agent's key. */
+  proof: {
+    /** The agent's session public key. */
+    publicKey: `0x${string}`;
+    /** KeyStore key id (keccak256 of the public key): its Keystore explorer page. */
+    keyId: `0x${string}`;
+    /** The account's key hash: getKey/spendInfos/canExecutePackedInfos take it. */
+    keyHash: `0x${string}`;
+    /** The only calls the key may make. */
+    calls: { label: string; contract: Address }[];
+  };
 }
 
 export type AgentStatus =
@@ -177,10 +207,42 @@ export interface AutumnState {
   agent: AgentStatus;
   /** Newest first. */
   activity: ActivityItem[];
-  /** The wallet's ERC-8004 agent identity, when known. */
-  identity: { registered: boolean } | null;
+  /** The wallet's ERC-8004 agent identity, when known. agentId is set when it could be found. */
+  identity: { registered: boolean; agentId?: string } | null;
+  /** CELO price and fee estimates; null when they could not be read. */
+  fees: FeeFacts | null;
+  /**
+   * An agent key this browser asked to grant that is live onchain but no
+   * running plan uses (for example the tab closed mid-grant and the server
+   * could not take it over). The owner should revoke it.
+   */
+  strayKey: { publicKey: `0x${string}`; reason: string } | null;
   /** Plain sentences about missing, stale or partial data. Empty when everything was read. */
   notices: string[];
+}
+
+/** Sending funds out of the wallet with the passkey. */
+export interface SendRequest {
+  asset: SendAsset;
+  to: Address;
+  /** Base units of the asset. */
+  amount: bigint;
+}
+
+export interface SendQuote {
+  /** The relay's maximum fee for this send, in `feeSymbol` base units. */
+  fee: bigint;
+  feeSymbol: "USD₮" | "CELO";
+  /** CELO this transaction also carries: Altana's one-time registration on a wallet's first passkey transaction. */
+  registrationCelo: bigint;
+  /** The largest amount of the asset that can be sent, leaving the fee. */
+  max: bigint;
+}
+
+export interface SendResult {
+  txHash: TxHash;
+  /** Balances read after the chain confirmed the transfer. */
+  balances: Balances;
 }
 
 export interface AutumnClient {
@@ -197,12 +259,30 @@ export interface AutumnClient {
   confirmPlan(input: PlanInput): Promise<Plan>;
   /** Revoke the agent onchain. Resolves once the chain shows the revoke. */
   stopAgent(): Promise<{ txHash?: TxHash }>;
+  /** Revoke `state.strayKey` onchain. Resolves once the chain shows it revoked. */
+  revokeStrayKey(): Promise<{ txHash?: TxHash }>;
+  /** What sending would cost, and the most that can be sent. Nothing is signed. `amount` defaults to the whole balance. */
+  quoteSend(req: { asset: SendAsset; to?: Address; amount?: bigint }): Promise<SendQuote>;
+  /** Send funds out with the passkey. Resolves once the chain shows the transfer and balances are re-read. */
+  send(req: SendRequest): Promise<SendResult>;
 }
 
 /* ---------- Plan rules shared by every implementation ---------- */
 
 export const PLAN_PRESETS_USDT = [1, 5, 10] as const;
 export const DIP_PERCENT = 2;
+/** The dip rule, worded exactly as the agent applies it. */
+export const DIP_RULE_TEXT = "one extra buy if the price is at least 2% below this period's purchase price";
+/** Who holds what. */
+export const CUSTODY_TEXT =
+  "Autumn's server holds the agent's session key, encrypted. The chain limits what that key can do; your passkey is the only admin.";
+/**
+ * What the session key can do, as the account contract enforces it. The
+ * relay fee is paid by the same key and is not restricted to a recipient,
+ * so it is stated as bounded by the cap rather than as impossible.
+ */
+export const LIMITS_TEXT =
+  "The agent's key can only call USD₮.approve and GoldBuyer.buy, and pays relay fees in USD₮. Everything it spends, fees included, is bounded by the cap.";
 export const PLAN_PERIODS: readonly PlanPeriod[] = ["week", "day"];
 
 export const WEEK_MS = 7 * 24 * 3600 * 1000;
@@ -234,6 +314,11 @@ export function draftLimits(input: Pick<PlanInput, "amount" | "period" | "buyThe
     resetsAt: nextResetUtc(now, input.period),
     expiresAt: new Date((nowSecs + PLAN_DURATION_SECS) * 1000),
   };
+}
+
+/** USD₮ to deposit to cover a whole plan: every scheduled buy plus its fee allowance (dip buys not included). */
+export function suggestedDeposit(amount: bigint, period: PlanPeriod): bigint {
+  return (amount + DEFAULT_FEE_ALLOWANCE_PER_BUY) * BigInt(periodsInPlan(period));
 }
 
 /** Whether deposits are enough to choose a plan: some USD₮, and the CELO the grant's registration needs. */

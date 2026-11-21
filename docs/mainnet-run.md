@@ -25,6 +25,11 @@ Until this run is done, none of these has happened on any chain:
 10. The "OLD" price-check refusal as the relay reports it (we match the word
     `OLD` in the error text; the real text is unknown).
 11. Vercel cron, Neon and the route handlers in a deployment.
+12. The relay's fee quote (`quoteExecute`) for a session purchase, which the
+    agent compares with the plan's 0.05 USD₮ per-buy allowance before sending.
+13. "Send out": an admin (passkey) transfer of USD₮, XAUt0 and CELO, and the
+    one-time KeyStore registration it carries if it is the wallet's first
+    passkey transaction.
 
 ## Before you start
 
@@ -77,7 +82,8 @@ UTC day.
   - `spendInfos(keyHash)` on the wallet: one entry, USD₮, period 2 (day),
     limit 1050000;
   - `canExecutePackedInfos(keyHash)`: exactly USD₮ `approve` and GoldBuyer `buy`;
-  - `getKey(keyHash).expiry` equals the end date shown;
+  - `getKey(keyHash)`: `expiry` equals the end date shown, `keyType` is 2
+    (secp256k1) and `isSuperAdmin` is false;
   - KeyStore `isValidKey(wallet, keyId)` is true.
 - [ ] The Home screen shows "Agent is running", the daily limit and the
       next purchase time.
@@ -123,8 +129,12 @@ node --env-file=../web/.env.local dist/cli.js try-buy <planId> 2000000 --i-under
       only then "Agent stopped".
 - [ ] Record: the revoke transaction hash, the USD₮ fee, and the time between
       the tap and "Agent stopped".
-- [ ] Check onchain: `isValidKey(wallet, keyId)` is false and the wallet's
-      `getKey(keyHash)` reverts or shows the key gone.
+- [ ] Check onchain, read-only, on both registries:
+  - KeyStore `isValidKey(wallet, keyId)` is false;
+  - the wallet's own account: `getKey(keyHash)` reverts with
+    `KeyDoesNotExist()`, and `getKeys()` no longer lists `keyHash`. The
+    account is what the relay checks a session against, so a key still on
+    the account is still live, whatever the KeyStore says.
 
 ## 7. Refusal after revoke
 
@@ -136,7 +146,16 @@ node --env-file=../web/.env.local dist/cli.js try-buy <planId> 1000000 --i-under
 - [ ] Run the tick. The plan must not appear among active plans.
 - [ ] The app still shows "Agent stopped".
 
-## 8. Restore
+## 8. Send out
+
+- [ ] In the app, tap "Send out" in the Wallet panel. Send 1 USD₮ to a Celo
+      address you control. Record the fee shown, the passkey prompt, the
+      transaction hash and the time until "Sent" appears.
+- [ ] Check on Celoscan that the USD₮ arrived and that the balances the app
+      shows after "Sent" match the chain.
+- [ ] Repeat with "Max" for XAUt0, and record what is left for the fee.
+
+## 9. Restore
 
 - [ ] On a second browser or device with the same synced passkey, open the
       app and tap "I already have an Autumn passkey".

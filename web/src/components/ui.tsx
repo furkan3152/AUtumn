@@ -37,7 +37,7 @@ export function Button({ variant = "primary", block, className = "", ...rest }: 
   return <button type="button" className={`btn btn--${variant} ${block ? "btn--block" : ""} ${className}`} {...rest} />;
 }
 
-export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+export function CopyButton({ text, label = "Copy", what = "address" }: { text: string; label?: string; what?: string }) {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
   const copy = async () => {
     try {
@@ -50,21 +50,31 @@ export function CopyButton({ text, label = "Copy" }: { text: string; label?: str
   };
   return (
     <>
-      <Button variant="plain" onClick={copy} className="btn--small">
+      <Button variant="plain" onClick={copy} className="btn--small" aria-label={`Copy ${what}`}>
         {state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : label}
       </Button>
       <span className="sr-only" aria-live="polite">
-        {state === "copied" ? "Address copied" : state === "failed" ? "Could not copy. Select the address instead." : ""}
+        {state === "copied" ? `Copied the ${what}` : state === "failed" ? `Could not copy. Select the ${what} instead.` : ""}
       </span>
     </>
   );
 }
 
-export function TxLink({ hash, children = "View on Celoscan" }: { hash: TxHash; children?: React.ReactNode }) {
+/**
+ * A link to a transaction on Celoscan. `label` is its accessible name: each
+ * link on a page must say which transaction it opens ("View the purchase of
+ * 0.04 g on Celoscan"), not only "View on Celoscan".
+ */
+export function TxLink({ hash, children = "View on Celoscan", label }: { hash: TxHash; children?: React.ReactNode; label?: string }) {
+  return <ExtLink href={txUrl(hash)} label={label}>{children}</ExtLink>;
+}
+
+/** An external link that opens in a new tab, with a tap target of at least 44 px. */
+export function ExtLink({ href, children, label }: { href: string; children: React.ReactNode; label?: string | undefined }) {
   return (
-    <a className="txlink" href={txUrl(hash)} target="_blank" rel="noopener noreferrer">
+    <a className="txlink" href={href} target="_blank" rel="noopener noreferrer" {...(label ? { "aria-label": `${label} (opens in a new tab)` } : {})}>
       {children}
-      <span className="sr-only"> (opens in a new tab)</span>
+      {!label && <span className="sr-only"> (opens in a new tab)</span>}
     </a>
   );
 }

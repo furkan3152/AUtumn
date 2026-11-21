@@ -20,6 +20,10 @@ export interface Storage {
   listPlansForWallet(walletAddress: Address): Promise<PlanRecord[]>;
   /** Plans of a wallet still waiting for a grant, created at or after `since` (unix seconds). */
   countPendingPlans(walletAddress: Address, since: number): Promise<number>;
+  /** Deletes the wallet's pending_grant plans created before `before` (unix seconds), with their session keys. Returns how many. */
+  deletePendingPlansBefore(walletAddress: Address, before: number): Promise<number>;
+  /** Every plan of a wallet, in any state. */
+  countPlans(walletAddress: Address): Promise<number>;
   /** pending_grant → active, storing the granted session and its grant transaction. */
   activatePlan(planId: string, session: SerializedSession, grantTxHash?: Hex): Promise<void>;
   /** → stopped. `at` is chain time; `txHash` the owner's revoke, when known. */

@@ -29,7 +29,7 @@ function aad(planId: string): Buffer {
 export function encryptSessionKey(privateKey: Hex, planId: string, key: Buffer): EncryptedKey {
   if (!/^0x[0-9a-fA-F]{64}$/.test(privateKey)) throw new Error("not a 32-byte private key");
   const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const cipher = createCipheriv("aes-256-gcm", key, iv, { authTagLength: 16 });
   cipher.setAAD(aad(planId));
   const ciphertext = Buffer.concat([cipher.update(Buffer.from(privateKey.slice(2), "hex")), cipher.final()]);
   return { ciphertext, iv, authTag: cipher.getAuthTag(), keyVersion: KEY_VERSION };
@@ -37,7 +37,7 @@ export function encryptSessionKey(privateKey: Hex, planId: string, key: Buffer):
 
 export function decryptSessionKey(enc: EncryptedKey, planId: string, key: Buffer): Hex {
   if (enc.keyVersion !== KEY_VERSION) throw new Error(`unsupported session key version ${enc.keyVersion}`);
-  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(enc.iv));
+  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(enc.iv), { authTagLength: 16 });
   decipher.setAAD(aad(planId));
   decipher.setAuthTag(Buffer.from(enc.authTag));
   const plain = Buffer.concat([decipher.update(Buffer.from(enc.ciphertext)), decipher.final()]);

@@ -232,6 +232,22 @@ export class PgStorage implements Storage {
     return Number(r.rows[0]!.n);
   }
 
+  async deletePendingPlansBefore(walletAddress: Address, before: number): Promise<number> {
+    // session_keys rows go with their plan (ON DELETE CASCADE). A pending plan has no attempts or run log.
+    const r = await this.pool.query(
+      `DELETE FROM plans p WHERE p.wallet_address = $1 AND p.status = 'pending_grant' AND p.created_at < $2
+         AND NOT EXISTS (SELECT 1 FROM purchase_attempts a WHERE a.plan_id = p.id)
+         AND NOT EXISTS (SELECT 1 FROM run_log l WHERE l.plan_id = p.id)`,
+      [walletAddress.toLowerCase(), before],
+    );
+    return r.rowCount ?? 0;
+  }
+
+  async countPlans(walletAddress: Address): Promise<number> {
+    const r = await this.pool.query<{ n: string }>("SELECT count(*) AS n FROM plans WHERE wallet_address = $1", [walletAddress.toLowerCase()]);
+    return Number(r.rows[0]!.n);
+  }
+
   async activatePlan(planId: string, session: SerializedSession, grantTxHash?: Hex): Promise<void> {
     const r = await this.pool.query(
       `UPDATE plans SET status = 'active', session = $2, grant_tx_hash = $3, updated_at = now()

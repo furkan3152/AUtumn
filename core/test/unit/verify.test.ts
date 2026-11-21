@@ -17,6 +17,8 @@ function stateFor(over: Partial<SessionState> = {}, cap = 5_050_000n, period: nu
     keyStoreValid: true,
     onAccount: true,
     accountExpiry: NOW + 86_400,
+    keyType: 2,
+    isSuperAdmin: false,
     spend: [{ token: getAddress(USDT), period, limit: cap, spentThisPeriod: 0n, periodStart: NOW }],
     allowedCalls: [
       { target: getAddress(USDT), selector: toFunctionSelector("approve(address,uint256)") },
@@ -59,5 +61,11 @@ describe("sessionLimitsMismatch", () => {
     const other = { ...s.spend[0]!, token: getAddress("0x3333333333333333333333333333333333333333") };
     expect(sessionLimitsMismatch({ ...s, spend: [...s.spend, other] }, weekly, GB)).toMatch(/other than USD₮/);
     expect(sessionLimitsMismatch({ ...s, spend: [...s.spend, { ...s.spend[0]!, period: SPEND_PERIOD.day }] }, weekly, GB)).toMatch(/more than one/);
+  });
+
+  it("refuses a super admin key or a key of another type, even with the right limits", () => {
+    expect(sessionLimitsMismatch(stateFor({ isSuperAdmin: true }), weekly, GB)).toMatch(/super admin/);
+    expect(sessionLimitsMismatch(stateFor({ isSuperAdmin: undefined }), weekly, GB)).toMatch(/super admin/);
+    expect(sessionLimitsMismatch(stateFor({ keyType: 1 }), weekly, GB)).toMatch(/secp256k1/);
   });
 });

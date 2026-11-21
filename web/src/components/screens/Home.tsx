@@ -1,7 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { periodsInPlan, type ActivityItem, type AutumnClient, type AutumnState, type RefusalReason } from "@/lib/autumn";
+import {
+  CUSTODY_TEXT,
+  DIP_RULE_TEXT,
+  LIMITS_TEXT,
+  addressUrl,
+  agentScanUrl,
+  keystoreKeyUrl,
+  periodsInPlan,
+  type ActivityItem,
+  type AutumnClient,
+  type AutumnState,
+  type RefusalReason,
+} from "@/lib/autumn";
 import {
   celo,
   formatDate,
@@ -16,7 +28,7 @@ import {
 import { errorText } from "@/lib/useAutumn";
 import { Scene, type SceneMode } from "../Scene";
 import { P, Sprite } from "../pixel";
-import { Button, CopyButton, Panel, Spinner, TxLink } from "../ui";
+import { Button, CopyButton, ExtLink, Panel, Spinner, TxLink } from "../ui";
 
 function useNow(ms = 30_000) {
   const [now, setNow] = useState(() => Date.now());
@@ -32,11 +44,13 @@ export function Home({
   state,
   onAddMoney,
   onNewPlan,
+  onSendOut,
 }: {
   client: AutumnClient;
   state: AutumnState;
   onAddMoney: () => void;
   onNewPlan: () => void;
+  onSendOut: () => void;
 }) {
   const now = useNow();
   const plan = state.plan!;
@@ -85,7 +99,7 @@ export function Home({
             <span className="key key--chest" aria-hidden="true" /> Chest: gold you hold
           </span>
           <span className="key-item">
-            <span className="key key--fence" aria-hidden="true" /> Fence: this {periodWord}&apos;s limit, gold posts are used
+            <span className="key key--fence" aria-hidden="true" /> Limit used: <span className="num">{Math.round(limitUsed * 100)}%</span>
           </span>
         </p>
       </div>
@@ -96,13 +110,13 @@ export function Home({
             <p>
               {agent.stoppedAt ? (
                 <>
-                  The agent was stopped {relative(agent.stoppedAt, now)} (<span className="num">{formatDateTime(agent.stoppedAt)}</span>).
+                  The agent was stopped {relative(agent.stoppedAt, now, { past: true })} (<span className="num">{formatDateTime(agent.stoppedAt)}</span>).
                 </>
               ) : (
                 <>The agent&apos;s key is revoked onchain.</>
               )}{" "}
               It can no longer buy anything.{" "}
-              {agent.txHash ? <TxLink hash={agent.txHash}>See the revoke on Celoscan</TxLink> : null}
+              {agent.txHash ? <TxLink hash={agent.txHash} label="See the revoke on Celoscan">See the revoke on Celoscan</TxLink> : null}
             </p>
           ) : (
             <p>The plan reached its end date on {formatDate(agent.expiredAt)}. The agent can no longer buy anything.</p>
@@ -177,7 +191,7 @@ export function Home({
               </div>
               <div>
                 <dt>Allowed</dt>
-                <dd>Gold purchases only, delivered to your wallet</dd>
+                <dd>{LIMITS_TEXT}</dd>
               </div>
               <div>
                 <dt>Ends</dt>
@@ -201,24 +215,30 @@ export function Home({
                 <dt>CELO</dt>
                 <dd className="num">{b ? celo(b.celo) : "Unknown"}</dd>
               </div>
-              {state.identity && (
-                <div>
-                  <dt>Agent ID</dt>
-                  <dd>{state.identity.registered ? "Registered (ERC-8004)" : "Not registered yet"}</dd>
-                </div>
-              )}
+              <div>
+                <dt>Gold</dt>
+                <dd className="num">{b ? `${formatGrams(b.gold)} g` : "Unknown"}</dd>
+              </div>
               <div>
                 <dt>Address</dt>
                 <dd className="addr-row">
                   <span className="num">{shortAddress(state.wallet!.address)}</span>
-                  <CopyButton text={state.wallet!.address} />
+                  <CopyButton text={state.wallet!.address} what="wallet address" />
                 </dd>
               </div>
             </dl>
-            <Button variant="plain" onClick={onAddMoney}>
-              Add money
-            </Button>
+            <p className="muted small">You can send your funds out at any time, whether the agent is running or stopped.</p>
+            <div className="row">
+              <Button variant="plain" onClick={onAddMoney}>
+                Add money
+              </Button>
+              <Button variant="plain" onClick={onSendOut}>
+                Send out
+              </Button>
+            </div>
           </Panel>
+
+          <OnchainProof state={state} />
         </div>
 
         <Panel title="Activity" className="activity">
@@ -271,7 +291,7 @@ function StatusAndStop({ client, state, now }: { client: AutumnClient; state: Au
               {next === null ? "none scheduled" : due ? "due now, at the agent's next run" : <span className="num">{formatDateTime(next)} ({relative(next, now)})</span>}
             </strong>
             . Plan: <span className="num">{usdt(plan.amount)} USD₮</span> of gold a {per}
-            {plan.buyTheDip ? ", plus one extra buy if gold drops 2%" : ""}.
+            {plan.buyTheDip ? `, plus ${DIP_RULE_TEXT}` : ""}.
           </p>
           {priceCheckDown && <p className="muted">Price check not available right now, the agent will retry.</p>}
         </>
@@ -286,8 +306,8 @@ function StatusAndStop({ client, state, now }: { client: AutumnClient; state: Au
       {!stopping && confirming && (
         <div className="confirm" role="group" aria-label="Confirm stop">
           <p>
-            <strong>Stop the agent?</strong> This sends a revoke to Celo. The agent will not be able to buy anything
-            after that. Your gold and USD₮ stay in your wallet.
+            <strong>Stop the agent?</strong> This sends a revoke to Celo. Your passkey approves it, and it costs a small
+            network fee. The agent will not be able to buy anything after that. Your gold and USD₮ stay in your wallet.
           </p>
           <div className="row">
             <Button variant="danger" onClick={stop} autoFocus>
@@ -331,7 +351,7 @@ function ActivityRow({ item }: { item: ActivityItem }) {
         <>
           Paid <span className="num">{usdt(item.spent)} USD₮</span> at{" "}
           <span className="num">{usdt(perGram(item.usdtPerOunce))}</span> per gram.{" "}
-          {item.trigger === "dip" ? "Extra buy after a 2% drop." : item.period === "day" ? "Daily buy." : "Weekly buy."}
+          {item.trigger === "dip" ? "Extra buy: the price was at least 2% below this period's purchase price." : item.period === "day" ? "Daily buy." : "Weekly buy."}
         </>
       );
       break;
@@ -371,6 +391,7 @@ function ActivityRow({ item }: { item: ActivityItem }) {
       break;
   }
   const tx = "txHash" in item ? item.txHash : undefined;
+  const txLabel = `View ${TX_NOUN[item.kind]} of ${formatDateTime(item.at)} on Celoscan`;
   return (
     <li className={`feed__item feed__item--${item.kind}`}>
       <FeedIcon name={icon} />
@@ -382,12 +403,96 @@ function ActivityRow({ item }: { item: ActivityItem }) {
           {tx && (
             <>
               {" · "}
-              <TxLink hash={tx} />
+              <TxLink hash={tx} label={txLabel} />
             </>
           )}
         </p>
       </div>
     </li>
+  );
+}
+
+const TX_NOUN: Record<ActivityItem["kind"], string> = {
+  purchase: "the purchase",
+  refused: "the refused purchase",
+  skipped: "the transaction",
+  "plan-started": "the plan's start",
+  registration: "the registration",
+  stopped: "the stop",
+};
+
+/**
+ * What anyone can check onchain: the agent's key in Altana's Keystore, the
+ * two calls it may make, its cap, period and expiry, and the agent identity.
+ * A <details> so it stays out of the way on a phone; open by default on wide screens.
+ */
+function OnchainProof({ state }: { state: AutumnState }) {
+  const plan = state.plan!;
+  const lim = plan.limits;
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    setOpen(window.matchMedia("(min-width: 900px)").matches);
+  }, []);
+  const short = (h: string) => `${h.slice(0, 10)}…${h.slice(-8)}`;
+  return (
+    <section className="frame frame--paper proof">
+      <details open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+        <summary>Onchain proof</summary>
+        <dl className="facts">
+          <div>
+            <dt>Agent key</dt>
+            <dd>
+              <span className="proof__key" title={plan.proof.publicKey}>
+                id {short(plan.proof.keyId)}
+              </span>{" "}
+              <ExtLink href={keystoreKeyUrl(plan.proof.keyId)} label="Open the agent's key in the Altana Keystore explorer">
+                Keystore explorer
+              </ExtLink>
+            </dd>
+          </div>
+          <div>
+            <dt>May call</dt>
+            <dd>
+              {plan.proof.calls.map((c, i) => (
+                <span key={c.label}>
+                  {i > 0 ? " and " : ""}
+                  <ExtLink href={addressUrl(c.contract)} label={`${c.label}: open the contract ${c.contract} on Celoscan`}>
+                    {c.label}
+                  </ExtLink>
+                </span>
+              ))}
+            </dd>
+          </div>
+          <div>
+            <dt>Cap</dt>
+            <dd className="num">
+              {usdt(lim.cap)} USD₮ per {lim.period === "day" ? "UTC day" : "week (from Monday 00:00 UTC)"}, fees included
+            </dd>
+          </div>
+          <div>
+            <dt>Expires</dt>
+            <dd className="num">{formatDate(lim.expiresAt)}</dd>
+          </div>
+          <div>
+            <dt>Identity</dt>
+            <dd>
+              {state.identity?.registered ? (
+                state.identity.agentId ? (
+                  <ExtLink href={agentScanUrl(state.identity.agentId)} label={`Open agent ${state.identity.agentId} on 8004scan`}>
+                    ERC-8004 agent #{state.identity.agentId}
+                  </ExtLink>
+                ) : (
+                  "Registered (ERC-8004)"
+                )
+              ) : (
+                "Not registered yet (ERC-8004)"
+              )}
+            </dd>
+          </div>
+        </dl>
+        <p className="muted small">{CUSTODY_TEXT}</p>
+      </details>
+    </section>
   );
 }
 

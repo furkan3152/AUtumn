@@ -47,6 +47,7 @@ const SKIP_TEXT: Record<string, { text: string; retries: boolean }> = {
   cap_exceeded: { text: "This purchase would go over the limit, so the agent did not send it.", retries: false },
   limits_mismatch: { text: "The agent refused to act: the limits onchain differ from the plan.", retries: false },
   too_many_failures: { text: "Several attempts failed, so the agent waits for the next period.", retries: false },
+  fee_too_high: { text: "The relay's fee was above this plan's fee allowance, so the agent did not buy. It will retry later in the period.", retries: true },
   quote_expired: { text: "The relay's fee quote expired before sending. The agent will retry.", retries: true },
   relay_failure: { text: "The Altana relay did not answer. The agent checks the chain before trying again.", retries: true },
   reverted: { text: "The purchase transaction reverted onchain, so no gold was bought.", retries: true },

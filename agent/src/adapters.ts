@@ -5,7 +5,7 @@ import {
   quoteBuy,
   readBalances,
   readPurchasesInTx,
-  readPurchasesInWeek,
+  readPurchasesSince,
   readSessionState,
   readTxFacts,
   USDT,
@@ -27,11 +27,11 @@ export function createChainReader(
     },
     sessionState: (wallet, publicKey) => readSessionState(client, { wallet, publicKey }),
     balances: (wallet) => readBalances(client, wallet),
-    purchasesInWeek: (at) =>
-      readPurchasesInWeek(client, {
+    purchasesSince: (since) =>
+      readPurchasesSince(client, {
         goldBuyer: cfg.goldBuyer,
         deployBlock: cfg.goldBuyerDeployBlock,
-        at,
+        since,
         ...(opts.logBlockRange ? { blockRange: opts.logBlockRange } : {}),
       }),
     purchasesInTx: (txHash) => readPurchasesInTx(client, cfg.goldBuyer, txHash),
@@ -53,6 +53,11 @@ export function createAltanaExecutor(rpcUrl?: string): SessionExecutor {
     async execute({ session, privateKey, calls }) {
       const live = deserializeSession(session, signerFromPrivateKey(privateKey));
       return client.execute({ session: live, calls, feeToken: USDT, chainId: CELO.chainId });
+    },
+    async quote({ session, privateKey, calls }) {
+      const live = deserializeSession(session, signerFromPrivateKey(privateKey));
+      const q = await client.quoteExecute({ session: live, calls, feeToken: USDT, chainId: CELO.chainId });
+      return { fee: q.fee, feeToken: q.feeToken };
     },
   };
 }

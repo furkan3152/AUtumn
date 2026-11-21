@@ -34,6 +34,13 @@ export const ALTANA_KEYSTORE_CONTROLLER: Address = "0x47bA5fc2A5b0CcB24BA3fAC9D4
 /** ERC-8004 identity registry on Celo (docs.altana.network, "ERC-8004: agent identity"; code present 2026-11-21). */
 export const ERC8004_IDENTITY_REGISTRY: Address = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432";
 
+/** Celo FeeCurrencyDirectory and the 18-decimal USD₮ fee adapter it lists (read 2026-11-21): CELO's price in USD₮. */
+export const FEE_CURRENCY_DIRECTORY: Address = "0x15F344b9E6c3Cb6F0376A36A64928b13F62C6276";
+export const USDT_FEE_ADAPTER: Address = "0x0E2A3e05bc9A16F5292A6170456A710cb89C6f72";
+
+/** Altana's public Keystore explorer (docs.altana.network, "Keystore Explorer"). */
+export const ALTANA_EXPLORER = "https://explorer.altana.network";
+
 /** ERC-8021 attribution code for this project (@celo/attribution-tags). */
 export const ATTRIBUTION_CODE = "celo_c24c5a65e5a3";
 

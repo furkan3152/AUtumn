@@ -102,6 +102,7 @@ export type RunLogKind =
   | "quote_expired"
   | "twap_unavailable"
   | "price_out_of_bound"
+  | "fee_too_high"
   | "relay_failure"
   | "reverted"
   | "limits_mismatch"

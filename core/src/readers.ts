@@ -3,6 +3,7 @@ import {
   ContractFunctionRevertedError,
   ContractFunctionZeroDataError,
   getAddress,
+  parseAbiItem,
   parseEventLogs,
   type Address,
   type Hex,
@@ -70,6 +71,10 @@ export type SessionState = {
   onAccount: boolean;
   /** Expiry the account stores for the key, unix seconds (0 = none); undefined when not on the account. */
   accountExpiry?: number;
+  /** Key type the account stores (2 = secp256k1); undefined when not on the account. */
+  keyType?: number;
+  /** Whether the account stores the key as a super admin; undefined when not on the account. A plan's key must be false. */
+  isSuperAdmin?: boolean;
   spend: SpendLimit[];
   allowedCalls: AllowedCall[];
   /**
@@ -116,6 +121,8 @@ export async function readSessionState(
   });
 
   let accountExpiry: number | undefined;
+  let keyType: number | undefined;
+  let isSuperAdmin: boolean | undefined;
   try {
     const key = await client.readContract({
       address: args.wallet,
@@ -125,6 +132,8 @@ export async function readSessionState(
       blockNumber: bn,
     });
     accountExpiry = Number(key.expiry);
+    keyType = Number(key.keyType);
+    isSuperAdmin = key.isSuperAdmin;
   } catch (err) {
     if (!isRevertOrNoData(err)) throw err;
   }
@@ -173,6 +182,8 @@ export async function readSessionState(
     keyStoreValid,
     onAccount,
     ...(accountExpiry !== undefined ? { accountExpiry } : {}),
+    ...(keyType !== undefined ? { keyType } : {}),
+    ...(isSuperAdmin !== undefined ? { isSuperAdmin } : {}),
     spend,
     allowedCalls,
     ...(usdtCap ? { usdtCap } : {}),
@@ -290,6 +301,20 @@ export async function readPurchasesInWeek(
   return purchases.filter((p) => p.timestamp >= start && p.timestamp < start + WEEK_SECS);
 }
 
+/**
+ * Purchases (optionally by one buyer) from unix time `since` up to now. The
+ * runner reads only from the oldest moment it needs (the current period's
+ * start, or its oldest open attempt), not a whole week each time.
+ */
+export async function readPurchasesSince(
+  client: PublicClient,
+  q: Omit<PurchaseQuery, "fromBlock" | "toBlock"> & { deployBlock: bigint; since: number },
+): Promise<Purchase[]> {
+  const from = await blockAtOrBefore(client, q.since, q.deployBlock);
+  const purchases = await readPurchases(client, { ...q, fromBlock: from < q.deployBlock ? q.deployBlock : from });
+  return purchases.filter((p) => p.timestamp >= q.since);
+}
+
 /** The Bought event(s) a given transaction emitted, from its receipt; null when the receipt does not exist yet. */
 export async function readPurchasesInTx(client: PublicClient, goldBuyer: Address, txHash: Hex): Promise<Purchase[] | null> {
   let receipt;
@@ -354,6 +379,36 @@ export async function readRegistration(client: PublicClient, wallet: Address, bl
 /** How many ERC-8004 agent identities the wallet owns on Celo (the registry is an ERC-721). */
 export async function readAgentIdentityCount(client: PublicClient, wallet: Address): Promise<bigint> {
   return client.readContract({ address: ERC8004_IDENTITY_REGISTRY, abi: erc721BalanceAbi, functionName: "balanceOf", args: [wallet] });
+}
+
+const erc721TransferEvent = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)");
+
+/**
+ * The ERC-8004 agent id minted to `wallet` between two blocks (the newest
+ * mint found), or null. The registry is not enumerable, so the id comes from
+ * its mint event; callers pass the narrow range right after a plan's grant.
+ */
+export async function readAgentIdMinted(
+  client: PublicClient,
+  wallet: Address,
+  fromBlock: bigint,
+  toBlock: bigint,
+  blockRange = DEFAULT_LOG_BLOCK_RANGE,
+): Promise<bigint | null> {
+  let found: bigint | null = null;
+  for (let from = fromBlock; from <= toBlock; from += blockRange) {
+    const to = from + blockRange - 1n > toBlock ? toBlock : from + blockRange - 1n;
+    const logs = await client.getLogs({
+      address: ERC8004_IDENTITY_REGISTRY,
+      event: erc721TransferEvent,
+      args: { from: "0x0000000000000000000000000000000000000000", to: wallet },
+      fromBlock: from,
+      toBlock: to,
+      strict: true,
+    });
+    for (const l of logs) found = l.args.tokenId;
+  }
+  return found;
 }
 
 export type PoolState = {

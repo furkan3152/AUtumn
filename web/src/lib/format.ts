@@ -14,6 +14,8 @@ export function formatUnits(value: bigint, decimals: number, maxFraction: number
 }
 
 export const usdt = (v: bigint) => formatUnits(v, DECIMALS.USDT, 2, 2);
+/** USD₮ with up to 4 decimals, for fees smaller than a cent. */
+export const usdtFine = (v: bigint) => formatUnits(v, DECIMALS.USDT, 4, 2);
 export const celo = (v: bigint) => formatUnits(v, DECIMALS.CELO, 2);
 
 /** XAUt0 base units to grams (display only). */
@@ -55,16 +57,34 @@ const dateTimeFmt = new Intl.DateTimeFormat("en-GB", {
 export const formatDate = (d: Date) => dateFmt.format(d);
 export const formatDateTime = (d: Date) => dateTimeFmt.format(d);
 
-export function relative(d: Date, now = Date.now()): string {
-  const diff = d.getTime() - now;
+const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
+
+/**
+ * "in 5 minutes", "3 hours ago". Pass `past: true` for an instant that has
+ * happened (a stop, a purchase): it never reads as the future, even when the
+ * chain's clock is a little ahead of this device's.
+ */
+export function relative(d: Date, now = Date.now(), opts: { past?: boolean } = {}): string {
+  let diff = d.getTime() - now;
+  if (opts.past && diff > 0) diff = 0;
   const abs = Math.abs(diff);
   const future = diff > 0;
   const wrap = (s: string) => (future ? `in ${s}` : `${s} ago`);
-  if (abs < 45_000) return future ? "in a few seconds" : "just now";
-  const min = Math.round(abs / 60_000);
-  if (min < 60) return wrap(`${min} min`);
+  if (abs < 45_000) return future ? "in less than a minute" : "just now";
+  const min = Math.max(1, Math.round(abs / 60_000));
+  if (min < 60) return wrap(plural(min, "minute"));
   const h = Math.round(abs / 3_600_000);
-  if (h < 36) return wrap(`${h} h`);
-  const days = Math.round(abs / 86_400_000);
-  return wrap(`${days} days`);
+  if (h < 36) return wrap(plural(h, "hour"));
+  return wrap(plural(Math.round(abs / 86_400_000), "day"));
+}
+
+/** Approximate dollars for an amount in USD₮ base units: "about $1.04", or "under $0.01". */
+export function approxUsd(v: bigint): string {
+  if (v > 0n && v < 10_000n) return "under $0.01";
+  return `about $${formatUnits(v, DECIMALS.USDT, 2, 2)}`;
+}
+
+/** A fixed-point percentage from basis points: 40 → "0.40%". */
+export function bpsPercent(bps: number): string {
+  return `${(bps / 100).toFixed(2)}%`;
 }

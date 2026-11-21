@@ -3,8 +3,9 @@
  * Loaded only when NEXT_PUBLIC_AUTUMN_PREVIEW=1. Nothing here touches a chain.
  *
  * Optional URL parameter `?preview=<scenario>` picks a starting point:
- *   fresh (default) | funded | active | empty | stopped | error | loading
+ *   fresh (default) | funded | active | empty | stopped | stray | error | loading
  */
+import { USDT as USDT_TOKEN, checkDestination, maxSendable, type SendAsset } from "@autumn/core";
 import {
   DECIMALS,
   WEEK_MS,
@@ -16,6 +17,8 @@ import {
   type AutumnState,
   type Plan,
   type PlanInput,
+  type SendQuote,
+  type SendRequest,
   type TxHash,
   type Wallet,
 } from "./autumn";
@@ -26,6 +29,10 @@ const OUNCE = 10n ** BigInt(DECIMALS.XAUT0);
 const PREVIEW_ADDRESS: Address = "0x7a3f0c1e9b2d4a6f8e5c3b1a0d9e8f7c6b5a4d3e";
 const PREVIEW_GOLD: Address = "0x9e1c0a2b3d4e5f60718293a4b5c6d7e8f9a0b1c2";
 const FEE = 20n * CELO;
+/** Preview figures: 0.0522 USD₮ per CELO and a 0.005 USD₮ relay fee, close to Celo mainnet on 2026-11-21. */
+const PREVIEW_FEES = { usdtPerCelo: 52_214n, relayFeeEstimate: 5_000n };
+const PREVIEW_KEY = `0x04${"5c".repeat(32)}${"a7".repeat(32)}` as const;
+const PREVIEW_SEND_FEE = 6_000n; // 0.006 USD₮
 
 let counter = 0;
 function fakeHash(): TxHash {
@@ -39,6 +46,9 @@ function fakeHash(): TxHash {
   return `0x${h}`;
 }
 
+const balanceOf = (b: { usdt: bigint; gold: bigint; celo: bigint }, asset: SendAsset) =>
+  asset === "USDT" ? b.usdt : asset === "XAUT0" ? b.gold : b.celo;
+
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const DAY = 24 * 3600 * 1000;
 
@@ -50,12 +60,14 @@ function emptyState(): AutumnState {
   return {
     wallet: null,
     balances: null,
-    registration: null,
+    registration: { walletRegistered: false, nextGrantFeeCelo: FEE, perKeyFeeCelo: FEE / 2n },
     price: { usdtPerOunce: 4126_400000n, observedAt: new Date(), priceCheckAvailable: true },
     plan: null,
     agent: { kind: "none" },
     activity: [],
     identity: null,
+    fees: { ...PREVIEW_FEES, observedAt: new Date() },
+    strayKey: null,
     notices: [],
   };
 }
@@ -69,6 +81,15 @@ function makePlan(input: Omit<PlanInput, "expiresAt">, startedAt: Date, nextPurc
     startedAt,
     nextPurchaseAt,
     txHash: fakeHash(),
+    proof: {
+      publicKey: PREVIEW_KEY,
+      keyId: `0x${"3e".repeat(32)}`,
+      keyHash: `0x${"9b".repeat(32)}`,
+      calls: [
+        { label: "USD₮.approve", contract: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e" },
+        { label: "GoldBuyer.buy", contract: PREVIEW_GOLD },
+      ],
+    },
     limits: {
       period: input.period,
       cap: d.cap,
@@ -86,19 +107,20 @@ function scenario(name: string): AutumnState {
   if (name === "fresh" || name === "error" || name === "loading") return s;
   const now = Date.now();
   s.wallet = { address: PREVIEW_ADDRESS, createdAt: new Date(now - 40 * DAY) };
-  s.registration = { walletRegistered: false, nextGrantFeeCelo: FEE };
+  s.registration = { walletRegistered: false, nextGrantFeeCelo: FEE, perKeyFeeCelo: FEE / 2n };
   s.balances = { usdt: 50n * USDT, gold: 0n, celo: 20n * CELO + CELO / 2n, observedAt: new Date() };
   if (name === "funded") return s;
 
   const weekly = 5n * USDT;
   const start = name === "empty" ? new Date(now - 60_000) : new Date(now - 4 * WEEK_MS + 6000);
-  s.registration = { walletRegistered: true, nextGrantFeeCelo: FEE / 2n };
+  s.registration = { walletRegistered: true, nextGrantFeeCelo: FEE / 2n, perKeyFeeCelo: FEE / 2n };
   const regTx = fakeHash();
   s.balances.celo = CELO / 2n;
   const firstNext = name === "empty" ? new Date(start.getTime() + WEEK_MS) : new Date(now + 6000);
   const plan = makePlan({ amount: weekly, period: "week", buyTheDip: true }, start, firstNext);
   s.plan = plan;
   s.agent = { kind: "active" };
+  s.identity = { registered: true, agentId: "1287" };
   const items: ActivityItem[] = [
     { kind: "registration", id: "reg", at: new Date(start.getTime() - 120_000), txHash: regTx },
     { kind: "plan-started", id: "plan", at: start, amount: weekly, period: "week", txHash: plan.txHash },
@@ -128,6 +150,10 @@ function scenario(name: string): AutumnState {
     }
     s.balances.gold = gold;
     s.balances.usdt -= spent;
+  }
+
+  if (name === "stray") {
+    s.strayKey = { publicKey: `0x04${"d1".repeat(64)}`, reason: "the Autumn server could not start a plan with it (another plan is still active for this wallet; stop it first)" };
   }
 
   if (name === "stopped") {
@@ -213,7 +239,7 @@ export function createPreviewClient(): AutumnClient {
       state = {
         ...state,
         wallet,
-        registration: { walletRegistered: false, nextGrantFeeCelo: FEE },
+        registration: { walletRegistered: false, nextGrantFeeCelo: FEE, perKeyFeeCelo: FEE / 2n },
         balances: { usdt: 0n, gold: 0n, celo: 0n, observedAt: new Date() },
       };
       emit();
@@ -241,7 +267,7 @@ export function createPreviewClient(): AutumnClient {
         ...state,
         plan,
         agent: { kind: "active" },
-        registration: { walletRegistered: true, nextGrantFeeCelo: FEE / 2n },
+        registration: { walletRegistered: true, nextGrantFeeCelo: FEE / 2n, perKeyFeeCelo: FEE / 2n },
         balances: { ...balances, celo: balances.celo - fee, observedAt: now },
         identity: { registered: true },
         activity: [
@@ -253,6 +279,46 @@ export function createPreviewClient(): AutumnClient {
       emit();
       scheduleWeekly();
       return plan;
+    },
+    async revokeStrayKey() {
+      await wait(1500);
+      state = { ...state, strayKey: null };
+      emit();
+      return { txHash: fakeHash() };
+    },
+    async quoteSend(req: { asset: SendAsset; to?: Address; amount?: bigint }): Promise<SendQuote> {
+      await wait(400);
+      const b = state.balances!;
+      const bal = balanceOf(b, req.asset);
+      const firstAction = !state.registration?.walletRegistered;
+      const registrationCelo = firstAction ? FEE / 2n : 0n;
+      const feeInCelo = req.asset === "CELO";
+      const fee = feeInCelo ? CELO / 10n : PREVIEW_SEND_FEE;
+      return {
+        fee,
+        feeSymbol: feeInCelo ? "CELO" : "USD₮",
+        registrationCelo,
+        max: maxSendable(req.asset, bal, { fee, feeToken: feeInCelo ? "0x0000000000000000000000000000000000000000" : USDT_TOKEN, extraNative: registrationCelo }),
+      };
+    },
+    async send(req: SendRequest) {
+      const dest = checkDestination(req.to, { wallet: PREVIEW_ADDRESS, contracts: [PREVIEW_GOLD] });
+      if (!dest.ok) throw new Error(dest.problem);
+      await wait(2200);
+      const b = state.balances!;
+      if (req.amount > balanceOf(b, req.asset)) throw new Error("The wallet does not hold that much (preview).");
+      const fee = req.asset === "CELO" ? CELO / 10n : PREVIEW_SEND_FEE;
+      const at = new Date();
+      const balances = {
+        ...b,
+        usdt: req.asset === "USDT" ? b.usdt - req.amount - fee : req.asset === "XAUT0" ? b.usdt - fee : b.usdt,
+        gold: req.asset === "XAUT0" ? b.gold - req.amount : b.gold,
+        celo: req.asset === "CELO" ? b.celo - req.amount - fee : b.celo,
+        observedAt: at,
+      };
+      state = { ...state, balances };
+      emit();
+      return { txHash: fakeHash(), balances };
     },
     async stopAgent() {
       state = { ...state, agent: { kind: "stopping" } };

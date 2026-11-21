@@ -1,6 +1,7 @@
 import { getAddress, toFunctionSelector, type Address } from "viem";
 import { SPEND_PERIOD } from "./abis.js";
 import { USDT } from "./constants.js";
+import { ACCOUNT_KEY_TYPE_SECP256K1 } from "./keys.js";
 import { APPROVE_SIGNATURE, BUY_SIGNATURE, type SessionGrant } from "./grant.js";
 import type { SessionState } from "./readers.js";
 
@@ -12,7 +13,8 @@ import type { SessionState } from "./readers.js";
  * purchase.
  *
  * Equal means: the key is on the account and valid in the KeyStore; the
- * allowlist is exactly {USD₮.approve, GoldBuyer.buy}; there is exactly one
+ * account stores it as an ordinary secp256k1 key, not a super admin (a super
+ * admin key skips every guard, IthacaAccount `_isSuperAdmin`); the allowlist is exactly {USD₮.approve, GoldBuyer.buy}; there is exactly one
  * spend cap, on USD₮, with the plan's period and limit; and the account's
  * expiry is the plan's expiry.
  */
@@ -24,6 +26,10 @@ export function sessionLimitsMismatch(
 ): string | undefined {
   const { requireActive = true, checkExpiry = true } = opts;
   if (requireActive && state.status !== "active") return `the session is not active onchain (${state.status})`;
+  if (state.onAccount) {
+    if (state.isSuperAdmin !== false) return "the key is a super admin on the account, not a limited session key";
+    if (state.keyType !== Number(ACCOUNT_KEY_TYPE_SECP256K1)) return "the key on the account is not a secp256k1 session key";
+  }
   const want = new Set([
     `${USDT.toLowerCase()}:${toFunctionSelector(APPROVE_SIGNATURE)}`,
     `${getAddress(goldBuyer).toLowerCase()}:${toFunctionSelector(BUY_SIGNATURE)}`,

@@ -53,9 +53,51 @@ export type ServiceDeps = {
   chain: ChainReader;
   encryptionKey: Buffer;
   goldBuyer: Address;
-  /** Pending plans a wallet may create per hour. Default 5. */
-  maxPendingPerHour?: number;
+  /** Unconfirmed plans a wallet may have within PENDING_PLAN_TTL_SECS. Default 3. */
+  maxPendingPerWallet?: number;
+  /** Plans a wallet may have in total (all states, after stale pending plans are pruned). Default 100. */
+  maxPlansPerWallet?: number;
+  /** Per-client (IP) limiter for POST /api/plans; omitted, no per-client limit. */
+  createLimiter?: RateLimiter;
 };
+
+/**
+ * An unconfirmed plan counts against its wallet's limit only this long, so a
+ * stranger who creates plans for someone else's wallet blocks it for minutes
+ * at most. A grant normally lands within a minute of the plan's creation.
+ */
+export const PENDING_PLAN_TTL_SECS = 600;
+/**
+ * Unconfirmed plans older than this are deleted with their session key when
+ * the wallet creates a new plan. A key granted onchain after that is no use
+ * to the server; the app finds it from the chain and offers to revoke it.
+ */
+export const PENDING_PLAN_RETENTION_SECS = 3600;
+
+/** A fixed-window counter per key (an IP address), in memory: one per server instance. */
+export type RateLimiter = { take(key: string): boolean };
+
+export function createRateLimiter(opts: { limit: number; windowMs: number; clock?: () => number; maxKeys?: number }): RateLimiter {
+  const { limit, windowMs, clock = Date.now, maxKeys = 10_000 } = opts;
+  const hits = new Map<string, { start: number; n: number }>();
+  return {
+    take(key: string): boolean {
+      const now = clock();
+      const h = hits.get(key);
+      if (!h || now - h.start >= windowMs) {
+        if (hits.size >= maxKeys) {
+          for (const [k, v] of hits) if (now - v.start >= windowMs) hits.delete(k);
+          if (hits.size >= maxKeys) hits.clear();
+        }
+        hits.set(key, { start: now, n: 1 });
+        return true;
+      }
+      if (h.n >= limit) return false;
+      h.n++;
+      return true;
+    },
+  };
+}
 
 /** The plan amounts the app offers, in whole USD₮. */
 export const PLAN_AMOUNTS_USDT = [1, 5, 10] as const;
@@ -95,7 +137,10 @@ export type CreatePlanResponse = {
  * POST /api/plans. Body: { wallet, amountUsdt: 1|5|10, period: "week"|"day",
  * dipBuy: boolean, expiresAt: unix seconds the browser showed }.
  */
-export async function createPlanRequest(deps: ServiceDeps, body: unknown): Promise<CreatePlanResponse> {
+export async function createPlanRequest(deps: ServiceDeps, body: unknown, client?: { ip?: string | null }): Promise<CreatePlanResponse> {
+  if (deps.createLimiter && !deps.createLimiter.take(client?.ip || "unknown")) {
+    throw new HttpError(429, "too many plans created from this address; try again in a few minutes");
+  }
   const b = obj(body);
   const wallet = walletOf(b.wallet);
   const amount = b.amountUsdt;
@@ -113,9 +158,12 @@ export async function createPlanRequest(deps: ServiceDeps, body: unknown): Promi
   if (Math.abs(expiresAt - (now + PLAN_DURATION_SECS)) > EXPIRY_TOLERANCE_SECS) {
     throw new HttpError(400, "expiresAt must be 12 weeks from now; reload the plan screen and try again");
   }
-  const limit = deps.maxPendingPerHour ?? 5;
-  if ((await deps.storage.countPendingPlans(wallet, now - 3600)) >= limit) {
-    throw new HttpError(429, "too many unconfirmed plans for this wallet in the last hour; try again later");
+  await deps.storage.deletePendingPlansBefore(wallet, now - PENDING_PLAN_RETENTION_SECS);
+  if ((await deps.storage.countPendingPlans(wallet, now - PENDING_PLAN_TTL_SECS)) >= (deps.maxPendingPerWallet ?? 3)) {
+    throw new HttpError(429, "too many unconfirmed plans for this wallet; try again in a few minutes");
+  }
+  if ((await deps.storage.countPlans(wallet)) >= (deps.maxPlansPerWallet ?? 100)) {
+    throw new HttpError(409, "this wallet has reached the number of plans the server keeps");
   }
 
   // Due at the hour of creation: the first purchase can happen right away,
@@ -165,20 +213,26 @@ function parseReportedSession(v: unknown): SerializedSession {
   return s as unknown as SerializedSession;
 }
 
-/** POST /api/plans/:id/activate. Body: { session: SerializedSession, grantTxHash }. */
+/**
+ * POST /api/plans/:id/activate. Body: { session: SerializedSession, grantTxHash? }.
+ * The grant transaction is optional: a browser that closed during the grant
+ * never learned it. The chain's state of the key is the proof either way.
+ */
 export async function activatePlanRequest(deps: ServiceDeps, planId: string, body: unknown): Promise<PlanView> {
   const b = obj(body);
   const reported = parseReportedSession(b.session);
-  const grantTxHash = txHashOf(b.grantTxHash, "grantTxHash");
+  const grantTxHash = b.grantTxHash === undefined || b.grantTxHash === null ? undefined : txHashOf(b.grantTxHash, "grantTxHash");
   const plan = await deps.storage.getPlan(planId);
   if (!plan) throw new HttpError(404, "no such plan");
   if (plan.status === "active") return planView(plan, deps.goldBuyer);
   if (plan.status !== "pending_grant") throw new HttpError(409, "this plan was stopped");
   if (getAddress(reported.walletAddress) !== plan.walletAddress) throw new HttpError(403, "the session is for another wallet");
 
-  const facts = await deps.chain.txFacts(grantTxHash, plan.walletAddress);
-  if (!facts) throw new HttpError(409, "the grant transaction is not visible onchain yet; try again in a few seconds");
-  if (!facts.succeeded) throw new HttpError(409, "the grant transaction reverted");
+  if (grantTxHash) {
+    const facts = await deps.chain.txFacts(grantTxHash, plan.walletAddress);
+    if (!facts) throw new HttpError(409, "the grant transaction is not visible onchain yet; try again in a few seconds");
+    if (!facts.succeeded) throw new HttpError(409, "the grant transaction reverted");
+  }
 
   // One running plan per wallet. An older plan whose session is no longer
   // active onchain is closed here; one that is still active blocks activation.

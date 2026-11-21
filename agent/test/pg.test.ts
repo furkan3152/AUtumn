@@ -86,6 +86,17 @@ describe.skipIf(!url)("PgStorage", () => {
       encryptSessionKey(privateKey, id, key),
     );
     expect(p).toMatchObject({ period: "day", createdBlock: 83_400_000n, dipBuy: true });
+    const w = getAddress("0x4444444444444444444444444444444444444444");
+    expect(await storage.countPlans(w)).toBe(1);
+    expect(await storage.deletePendingPlansBefore(w, 1_795_000_000)).toBe(0); // not older than the cutoff
+    expect(await storage.deletePendingPlansBefore(w, 1_795_000_001)).toBe(1);
+    expect(await storage.getPlan(id)).toBeNull();
+    expect(await storage.getEncryptedSessionKey(id)).toBeNull();
+    expect(await storage.countPlans(w)).toBe(0);
+    await storage.createPlan(
+      { id, walletAddress: w, amountPerBuy: 1_000_000n, period: "day", feeAllowancePerBuy: 50_000n, dipBuy: true, dayOfWeek: 0, hourUtc: 7, expiresAt: 1_800_000_000, sessionPublicKey: publicKey, createdAt: 1_795_000_000, createdBlock: 83_400_000n },
+      encryptSessionKey(privateKey, id, key),
+    );
     await expect(pool.query("UPDATE plans SET period = 'month' WHERE id = $1", [id])).rejects.toThrow();
   });
 

@@ -3,6 +3,7 @@ export {
   grantForPlan,
   sendHeadroom,
   TWAP_UNAVAILABLE_REASON,
+  FEE_TOO_HIGH_REASON,
   type Runner,
   type RunnerOptions,
   type TickReport,

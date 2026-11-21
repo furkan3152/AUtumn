@@ -5,7 +5,7 @@
 import "server-only";
 import pg from "pg";
 import { NextResponse } from "next/server";
-import { HttpError, createProductionService, serverConfigFromEnv, toJson, type ServiceDeps } from "@autumn/agent";
+import { HttpError, createProductionService, createRateLimiter, serverConfigFromEnv, toJson, type ServiceDeps } from "@autumn/agent";
 
 type Holder = { pool?: pg.Pool; deps?: ServiceDeps; live?: boolean };
 const g = globalThis as unknown as { __autumn?: Holder };
@@ -31,7 +31,8 @@ export function pool(): pg.Pool {
 export function service(): ServiceDeps {
   if (!holder.deps) {
     const { deps, live } = createProductionService(process.env, pool());
-    holder.deps = deps;
+    // Per server instance: at most 10 new plans per client address per 10 minutes.
+    holder.deps = { ...deps, createLimiter: createRateLimiter({ limit: 10, windowMs: 10 * 60_000 }) };
     holder.live = live;
   }
   return holder.deps;
@@ -52,6 +53,13 @@ export async function handle(fn: () => Promise<unknown>): Promise<NextResponse> 
     console.error(JSON.stringify({ msg: "request failed", error: msg }));
     return json({ error: "the Autumn server could not complete this request" }, 500);
   }
+}
+
+/** The client's address as the platform reports it (Vercel sets x-forwarded-for; the first entry is the client). */
+export function clientIp(req: Request): string | null {
+  const fwd = req.headers.get("x-forwarded-for");
+  if (fwd) return fwd.split(",")[0]!.trim() || null;
+  return req.headers.get("x-real-ip");
 }
 
 export async function readBody(req: Request): Promise<unknown> {

@@ -8,8 +8,8 @@ export interface ChainReader {
   head(): Promise<{ number: bigint; timestamp: number }>;
   sessionState(wallet: Address, publicKey: Hex): Promise<SessionState>;
   balances(wallet: Address): Promise<Balances>;
-  /** Every GoldBuyer purchase (all buyers) in the calendar week containing `at`. A week holds all of its days' purchases. */
-  purchasesInWeek(at: number): Promise<Purchase[]>;
+  /** Every GoldBuyer purchase (all buyers) at or after unix time `since`, up to the head. */
+  purchasesSince(since: number): Promise<Purchase[]>;
   /** Purchases a transaction emitted; null when there is no receipt (yet). */
   purchasesInTx(txHash: Hex): Promise<Purchase[] | null>;
   quote(amountIn: bigint): Promise<BuyQuote>;
@@ -20,4 +20,6 @@ export interface ChainReader {
 /** Sends a batch with a session key. Production: `createAltanaExecutor` (Altana SDK). */
 export interface SessionExecutor {
   execute(args: { session: SerializedSession; privateKey: Hex; calls: readonly Call[] }): Promise<ExecuteResult>;
+  /** The relay's maximum fee for exactly these calls, and its token; nothing is signed or sent. */
+  quote(args: { session: SerializedSession; privateKey: Hex; calls: readonly Call[] }): Promise<{ fee: bigint; feeToken: Address }>;
 }

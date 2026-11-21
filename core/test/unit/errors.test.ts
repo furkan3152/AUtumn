@@ -35,6 +35,8 @@ describe("SDK error mapping", () => {
     expect(explainExecuteResult({ status: "CONFIRMED", statusCode: 200 })).toBeUndefined();
     expect(explainExecuteResult({ status: "FAILED", statusCode: 300 })?.bought).toBe("no");
     expect(explainExecuteResult({ status: "FAILED", statusCode: 500 })?.bought).toBe("no");
+    // 600: partially reverted. Not proof that nothing was bought: re-read the chain.
+    expect(explainExecuteResult({ status: "FAILED", statusCode: 600 })?.bought).toBe("unknown");
     expect(explainExecuteResult({ status: "PENDING", statusCode: 100 })?.bought).toBe("unknown");
     expect(explainExecuteResult({ status: "FAILED" })?.bought).toBe("unknown");
   });

@@ -114,15 +114,18 @@ export function explainAltanaError(err: unknown): ExplainedFailure {
 /**
  * Maps a non-throwing execute result. CONFIRMED is not a failure and returns
  * undefined. FAILED with a 3xx/4xx code was refused before inclusion; FAILED
- * with 5xx/6xx landed and reverted (it consumed a fee but bought nothing);
- * PENDING is unknown.
+ * with 5xx landed and reverted (it consumed a fee but bought nothing);
+ * PENDING is unknown. EIP-5792 600 is "partially reverted": some calls may
+ * have taken effect, so the outcome is unknown and the caller re-reads the
+ * chain before concluding.
  */
 export function explainExecuteResult(r: { status: string; statusCode?: number }): ExplainedFailure | undefined {
   if (r.status === "CONFIRMED") return undefined;
   if (r.status === "PENDING") return make("relay_failure", "unknown");
   const c = r.statusCode;
   if (c !== undefined && c >= 300 && c < 500) return make("relay_failure", "no");
-  if (c !== undefined && c >= 500 && c < 700) {
+  if (c !== undefined && c >= 600 && c < 700) return make("unknown", "unknown");
+  if (c !== undefined && c >= 500 && c < 600) {
     return { ...make("unknown", "no"), message: "The purchase transaction reverted onchain, so no gold was bought." };
   }
   return make("unknown", "unknown");

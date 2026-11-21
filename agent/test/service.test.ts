@@ -5,8 +5,11 @@ import { PLAN_DURATION_SECS } from "@autumn/core";
 import {
   activatePlanRequest,
   createPlanRequest,
+  createRateLimiter,
   cronAuthorized,
   HttpError,
+  PENDING_PLAN_RETENTION_SECS,
+  PENDING_PLAN_TTL_SECS,
   stopPlanRequest,
   walletViewRequest,
   type ServiceDeps,
@@ -85,11 +88,35 @@ describe("createPlanRequest", () => {
     await rejects(createPlanRequest(deps, "nope"), 400);
   });
 
-  it("limits unconfirmed plans per wallet per hour", async () => {
-    const { deps } = setup();
-    for (let i = 0; i < 5; i++) await createPlanRequest(deps, body());
+  it("limits unconfirmed plans per wallet for ten minutes only, so a stranger cannot block a wallet for long", async () => {
+    const { deps, chain } = setup();
+    for (let i = 0; i < 3; i++) await createPlanRequest(deps, body());
     await rejects(createPlanRequest(deps, body()), 429);
     await createPlanRequest(deps, body({ wallet: OTHER })); // other wallets are not affected
+    chain.now += PENDING_PLAN_TTL_SECS + 1;
+    await createPlanRequest(deps, body({ expiresAt: chain.now + PLAN_DURATION_SECS }));
+  });
+
+  it("deletes unconfirmed plans older than an hour with their keys, and caps plans per wallet", async () => {
+    const { deps, chain, storage } = setup();
+    const old = await createPlanRequest(deps, body());
+    chain.now += PENDING_PLAN_RETENTION_SECS + 1;
+    await createPlanRequest(deps, body({ expiresAt: chain.now + PLAN_DURATION_SECS }));
+    expect(await storage.getPlan(old.planId)).toBeNull();
+    expect(await storage.getEncryptedSessionKey(old.planId)).toBeNull();
+    await rejects(createPlanRequest({ ...deps, maxPlansPerWallet: 1 }, body({ expiresAt: chain.now + PLAN_DURATION_SECS })), 409, /number of plans/);
+  });
+
+  it("rate-limits plan creation per client address", async () => {
+    const { deps } = setup();
+    let t = 0;
+    const limited = { ...deps, createLimiter: createRateLimiter({ limit: 2, windowMs: 60_000, clock: () => t }) };
+    await createPlanRequest(limited, body(), { ip: "203.0.113.7" });
+    await createPlanRequest(limited, body({ wallet: OTHER }), { ip: "203.0.113.7" });
+    await rejects(createPlanRequest(limited, body({ wallet: OTHER }), { ip: "203.0.113.7" }), 429, /from this address/);
+    await createPlanRequest(limited, body({ wallet: OTHER }), { ip: "198.51.100.1" });
+    t += 60_000;
+    await createPlanRequest(limited, body({ wallet: OTHER }), { ip: "203.0.113.7" });
   });
 });
 
@@ -142,6 +169,22 @@ describe("activatePlanRequest", () => {
     await rejects(activatePlanRequest(deps, created.planId, { session: created.expected, grantTxHash: GRANT_TX }), 409, /reverted/);
     await rejects(activatePlanRequest(deps, "00000000-0000-0000-0000-000000000000", { session: created.expected, grantTxHash: GRANT_TX }), 404);
     await rejects(activatePlanRequest(deps, created.planId, { session: created.expected, grantTxHash: "0x12" }), 400);
+  });
+
+  it("activates without a grant transaction (the tab closed mid-grant): the chain's key state is the proof", async () => {
+    const { deps, chain } = setup();
+    const created = await createPlanRequest(deps, body());
+    await rejects(activatePlanRequest(deps, created.planId, { session: created.expected }), 409, /not active onchain/);
+    grantOnchain(chain, created);
+    expect(await activatePlanRequest(deps, created.planId, { session: created.expected })).toMatchObject({ status: "active", grantTxHash: null });
+  });
+
+  it("refuses to activate a key the account holds as a super admin", async () => {
+    const { deps, chain } = setup();
+    const created = await createPlanRequest(deps, body());
+    grantOnchain(chain, created);
+    chain.superAdmin = true;
+    await rejects(activatePlanRequest(deps, created.planId, { session: created.expected, grantTxHash: GRANT_TX }), 409, /super admin/);
   });
 
   it("keeps one running plan per wallet: a second activation waits for the first session to end onchain", async () => {
