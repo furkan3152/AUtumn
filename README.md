@@ -193,9 +193,9 @@ mainnet. Reading needs no funds. A plan needs a funded wallet; see
 - Set the project root to `web/` and turn on "Include files outside the root
   directory". The `vercel-build` script builds `core/` and `agent/` first.
 - Add every variable from `web/.env.example` to the project.
-- `web/vercel.json` runs the agent every hour. Hourly cron needs a paid
-  Vercel plan; on the free plan, call `/api/cron/tick` from any scheduler with
-  the same header. The agent retries skipped purchases on each run, so a
+- `web/vercel.json` runs the agent once a day, which the free Vercel plan
+  allows. For hourly runs, call `/api/cron/tick` from any scheduler with the
+  same header. The agent retries skipped purchases on each run, so a
   daily-only schedule can miss a retry window.
 - One run handles four plans at a time (a wallet's plans one after another),
   reads purchase history once from the oldest point it needs, and returns
@@ -219,6 +219,19 @@ The server never asks for a signature. It trusts the chain instead.
 The SDK has no way to sign a message with the passkey, and a new wallet
 cannot verify signatures onchain before its first transaction, so a signed
 challenge would not work for a first plan anyway.
+
+## Deployed on Celo mainnet
+
+| What | Address |
+|---|---|
+| `GoldBuyer` (source verified on Sourcify) | [`0xB279c4380557b319C42ef3B023Ac8C8b2d64B6A0`](https://celoscan.io/address/0xB279c4380557b319C42ef3B023Ac8C8b2d64B6A0), block 83,395,551 |
+
+The USD₮/XAUt0 pool kept one price observation, so its 30-minute average was
+often unavailable. Two transactions raised its capacity to 1,800 observations
+([`0x3058…b4d7`](https://celoscan.io/tx/0x3058feaf6c9a19b850b868a31f951e748535c91e78e50bec47a504de7d41b4d7),
+[`0x657b…934c`](https://celoscan.io/tx/0x657b695b7ad16ab3d11fa5171ffb21b9b2964772fd0708c94cbb9e847b59934c)).
+The first purchase through the contract was a team test of 1 USD₮
+([`0x015b…d588`](https://celoscan.io/tx/0x015b6ddf1524028a34f0652d9a6fee28c01dfc7bf45a1a2a6927321e2863d588)).
 
 ## Licence
 
