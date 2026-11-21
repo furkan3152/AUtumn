@@ -5,12 +5,19 @@
  *
  * It sets up an Altana wallet the way mainnet has one (EIP-7702 delegation to
  * the real Altana account proxy, an admin key, a session key with our grant's
- * permissions and cap, KeyStore registrations paying the real fee with fork
- * CELO), deploys GoldBuyer, and then runs, with the agent's own EOA as submitter:
+ * permissions and cap plus the Orchestrator any-selector entry the SDK's Porto
+ * layer adds to every session key, KeyStore registrations paying the real fee
+ * with fork CELO), deploys GoldBuyer, and then runs, with the agent's own EOA
+ * as submitter:
+ *   0. core's sessionLimitsMismatch accepts that allowlist, and the session
+ *      key cannot use the Orchestrator entry to send CELO or to approve past
+ *      the cap (preflight eth_calls of signed intents; nothing is sent),
  *   1. one purchase (must buy; Celo's verifyTx must return our code),
  *   2. one purchase over the cap (must be refused, and when forced on chain, must buy nothing),
  *   3. one purchase after revoking the key (must be refused, and when forced, must buy nothing),
- *   4. the runner end to end with this executor (buys once, then already_bought).
+ *   4. the runner end to end with this executor on the same real-shaped grant
+ *      (buys once, then already_bought), and a control wallet whose session
+ *      also has any-function on GoldBuyer (the runner refuses it).
  *
  * Env: ANVIL_BIN (default ~/.foundry/bin/anvil or PATH), FORK_URL (default
  * forno), FORK_BLOCK (default latest), DIRECT_FORK_OUT (write the JSON record there).
@@ -59,10 +66,12 @@ import {
   intentDigest,
   ithacaAccountNonceAbi,
   orchestratorAbi,
+  ANY_SELECTOR,
   quoteBuy,
   readSessionState,
   sessionKeyIds,
   SPEND_PERIOD,
+  sessionLimitsMismatch,
   USDT,
   verifyTx,
   XAUT0,
@@ -106,8 +115,6 @@ const erc20 = parseAbi(["function balanceOf(address) view returns (uint256)"]);
 
 /** ERC-7821 batch mode without opData (self-call by the EOA). */
 const MODE_BATCH = pad("0x01", { dir: "right", size: 32 });
-/** Porto's "any selector" (Call.anySelector), as the relay grants for the Orchestrator. */
-const ANY_SELECTOR = "0x32323232";
 /** USD₮ `balanceOf` mapping slot (found on the fork by probing; not a public constant). */
 const USDT_BALANCE_SLOT = 51n;
 
@@ -171,10 +178,16 @@ describe.skipIf(!ANVIL || !existsSync(GOLD_BUYER_ARTIFACT))("direct submitter on
    * A wallet as mainnet has one after `createWallet` + `grantSession`:
    * - code = 0xef0100 ‖ Altana's account proxy (EIP-7702), implementation IthacaAccount 0.5.10;
    * - an admin key (super admin) authorised on the account and registered as root in the KeyStore;
-   * - the session key: expiry, allowlist {USD₮.approve, GoldBuyer.buy} (+ the Orchestrator any-selector
-   *   entry the relay adds to every session, when `withOrchestratorEntry`), one USD₮ cap, KeyStore-registered.
+   * - the session key: expiry, the allowlist a real grant stores (`grant.onchainCalls`: USD₮.approve,
+   *   GoldBuyer.buy and the Orchestrator any-selector entry Porto adds; plus `extraCalls` for a control),
+   *   one USD₮ cap, KeyStore-registered.
    */
-  async function setUpWallet(ownerPk: Hex, sessionPublicKey: Hex, grant: { periodCap: bigint; period: "day" | "week"; expiry: number }, withOrchestratorEntry: boolean) {
+  async function setUpWallet(
+    ownerPk: Hex,
+    sessionPublicKey: Hex,
+    grant: { periodCap: bigint; period: "day" | "week"; expiry: number; onchainCalls: readonly { target: Address; selector: Hex }[] },
+    extraCalls: { target: Address; selector: Hex }[] = [],
+  ) {
     const owner = privateKeyToAccount(ownerPk);
     const adminPk = generatePrivateKey();
     const admin = privateKeyToAccount(adminPk);
@@ -206,9 +219,9 @@ describe.skipIf(!ANVIL || !existsSync(GOLD_BUYER_ARTIFACT))("direct submitter on
       { to: ALTANA_KEYSTORE_CONTROLLER, value, data: encodeFunctionData({ abi: controllerAbi, functionName: "initialRegisterKey", args: [keccak256(admin.publicKey), "0x0000000000000000000000000000000000000000", "0x", admin.publicKey, 0] }) },
       { to: ALTANA_KEYSTORE_CONTROLLER, value, data: encodeFunctionData({ abi: controllerAbi, functionName: "registerKey", args: [session.keyId, "0x0000000000000000000000000000000000000000", "0x", session.publicKey, grant.expiry] }) },
       self(encodeFunctionData({ abi: accountAbi, functionName: "authorize", args: [accountKey(session.address, { expiry: grant.expiry, superAdmin: false })] })),
-      self(encodeFunctionData({ abi: accountAbi, functionName: "setCanExecute", args: [session.keyHash, USDT, toFunctionSelector("approve(address,uint256)"), true] })),
-      self(encodeFunctionData({ abi: accountAbi, functionName: "setCanExecute", args: [session.keyHash, goldBuyer, toFunctionSelector("buy(uint256,uint256)"), true] })),
-      ...(withOrchestratorEntry ? [self(encodeFunctionData({ abi: accountAbi, functionName: "setCanExecute", args: [session.keyHash, ALTANA_ORCHESTRATOR, ANY_SELECTOR, true] }))] : []),
+      ...[...grant.onchainCalls, ...extraCalls].map((c) =>
+        self(encodeFunctionData({ abi: accountAbi, functionName: "setCanExecute", args: [session.keyHash, c.target, c.selector, true] })),
+      ),
       self(encodeFunctionData({ abi: accountAbi, functionName: "setSpendLimit", args: [session.keyHash, USDT, SPEND_PERIOD[grant.period], grant.periodCap] })),
     ];
     const celoBefore = await pub.getBalance({ address: wallet });
@@ -276,7 +289,7 @@ describe.skipIf(!ANVIL || !existsSync(GOLD_BUYER_ARTIFACT))("direct submitter on
       { walletAddress: privateKeyToAccount(ownerPk).address, amountPerBuy: 1_000_000n, period: "week", expiresAt: Number(t0) + 30 * 86_400, dayOfWeek: 0, hourUtc: 0 },
     );
     const sessionPk = decryptSessionKey((await storage.getEncryptedSessionKey(plan.id))!, plan.id, encryptionKey);
-    const w = await setUpWallet(ownerPk, sessionPublicKey, grant, true);
+    const w = await setUpWallet(ownerPk, sessionPublicKey, grant);
     const session: SerializedSession = {
       walletAddress: w.wallet,
       publicKey: sessionPublicKey,
@@ -296,15 +309,43 @@ describe.skipIf(!ANVIL || !existsSync(GOLD_BUYER_ARTIFACT))("direct submitter on
     const forced = createDirectExecutor({ rpcUrl: rpc, submitterKey: agentKey, goldBuyer, intentTtlSecs: 600, unsafeSkipPreflight: true });
     const agentCelo0 = await pub.getBalance({ address: direct.submitter });
 
-    // ---- 0. The runner on this wallet before any purchase: the relay-style Orchestrator entry is not in our plan's allowlist ----
+    // ---- 0. The real-shaped allowlist passes core's check; the Orchestrator entry cannot move funds ----
     {
-      await storage.activatePlan(plan.id, session);
-      await mine(5);
-      const runner = createRunner({ storage, chain: createChainReader({ goldBuyer, goldBuyerDeployBlock: (record.goldBuyer as { block: bigint }).block, rpcUrl: rpc }), executor: direct, encryptionKey, goldBuyer, recheckDelayMs: 0, sleep: async () => {} });
-      const tick = await runner.tick();
-      record.runnerOnMainnetShapedGrant = tick.plans[0];
-      // The runner refuses before signing anything: the account's allowlist has a third entry.
-      expect(tick.plans[0]).toMatchObject({ decision: "skipped", kind: "limits_mismatch" });
+      expect(grant.onchainCalls.map((c) => c.target)).toContain(getAddress(ALTANA_ORCHESTRATOR));
+      const key = (c: { target: Address; selector: Hex }) => `${c.target.toLowerCase()}:${c.selector.toLowerCase()}`;
+      expect(new Set(state.allowedCalls.map(key))).toEqual(new Set(grant.onchainCalls.map(key)));
+      expect(state.allowedCalls.find((c) => c.target === getAddress(ALTANA_ORCHESTRATOR))?.selector).toBe(ANY_SELECTOR);
+      expect(sessionLimitsMismatch(state, grant, goldBuyer)).toBeUndefined();
+
+      // What the session key could try with the entry, signed and checked by eth_call (forced mode: nothing is sent).
+      const attacker = privateKeyToAccount(generatePrivateKey()).address;
+      const withdraw = (token: Address, amount: bigint) =>
+        encodeFunctionData({ abi: parseAbi(["function withdrawTokens(address token, address recipient, uint256 amount)"]), functionName: "withdrawTokens", args: [token, attacker, amount] });
+      const approve = (spender: Address, amount: bigint) =>
+        encodeFunctionData({ abi: parseAbi(["function approve(address spender, uint256 amount)"]), functionName: "approve", args: [spender, amount] });
+      const probe = async (calls: Call[]) => {
+        const p = await forced.prepare({ session, privateKey: sessionPk, calls }, true);
+        return p.preflightErrName ?? p.preflightErr;
+      };
+      const probes = {
+        // Send 1 CELO of the wallet's to the Orchestrator (anyone can then sweep it with withdrawTokens): no native limit.
+        celoToOrchestrator: await probe([{ to: ALTANA_ORCHESTRATOR, value: 10n ** 18n, data: "0x" }]),
+        // The same with calldata: every other Orchestrator entry point is non-payable or reverts in this context.
+        celoWithWithdrawCall: await probe([{ to: ALTANA_ORCHESTRATOR, value: 10n ** 18n, data: withdraw("0x0000000000000000000000000000000000000000", 0n) }]),
+        // Approve an attacker for more than the cap, next to an Orchestrator call (withdrawTokens calls out to any
+        // `token` contract, so a contract the attacker controls would run mid-batch): the approval itself is metered.
+        approvePastCap: await probe([
+          { to: USDT, value: 0n, data: approve(attacker, 2_000_000n) },
+          { to: ALTANA_ORCHESTRATOR, value: 0n, data: withdraw(USDT, 0n) },
+        ]),
+        // The entry itself is usable (value 0, the Orchestrator's own balance): it moves nothing of the wallet's.
+        withdrawNothing: await probe([{ to: ALTANA_ORCHESTRATOR, value: 0n, data: withdraw(USDT, 0n) }]),
+      };
+      expect(probes.celoToOrchestrator).toBe("NoSpendPermissions");
+      expect(probes.celoWithWithdrawCall).toBe("CallError"); // withdrawTokens is not payable: the batch reverts
+      expect(probes.approvePastCap).toBe("ExceededSpendLimit");
+      expect(probes.withdrawNothing).toBe("0x00000000");
+      record.orchestratorEntry = { allowedCalls: state.allowedCalls, sessionLimitsMismatch: "undefined (accepted)", probes };
     }
 
     // ---- 1. One purchase ----
@@ -392,8 +433,8 @@ describe.skipIf(!ANVIL || !existsSync(GOLD_BUYER_ARTIFACT))("direct submitter on
       { storage, encryptionKey, goldBuyer, now: Number(t0) },
       { walletAddress: privateKeyToAccount(ownerPk).address, amountPerBuy: 1_000_000n, period: "week", expiresAt: Number(t0) + 30 * 86_400, dayOfWeek: 0, hourUtc: 0 },
     );
-    // The grant exactly as core's planToSessionGrant describes it (no Orchestrator entry), so the runner's own checks pass.
-    const w = await setUpWallet(ownerPk, sessionPublicKey, grant, false);
+    // The grant as a real one lands: grant.onchainCalls, Orchestrator entry included. The runner's own checks run unchanged.
+    const w = await setUpWallet(ownerPk, sessionPublicKey, grant);
     await storage.activatePlan(plan.id, {
       walletAddress: w.wallet, publicKey: sessionPublicKey,
       permissions: { calls: grant.permissions.calls, spend: grant.permissions.spend.map((s) => ({ limit: s.limit.toString(), period: s.period, token: s.token! })) },
@@ -415,5 +456,30 @@ describe.skipIf(!ANVIL || !existsSync(GOLD_BUYER_ARTIFACT))("direct submitter on
     const second = (await runner.tick()).plans[0]!;
     expect(second).toMatchObject({ decision: "already_bought", txHash: first.txHash });
     record.runner = { wallet: w.wallet, first, second, from: tx.from, gasUsed: direct.lastOutcome()?.gasUsed, attempts: storage.attempts.map((a) => ({ status: a.status, txHash: a.txHash, callsId: a.callsId })) };
+
+    // Control: the same grant plus any-function on GoldBuyer. The runner refuses before signing anything.
+    const cStorage = new MemoryStorage();
+    const cOwner = generatePrivateKey();
+    const c = await createPlan(
+      { storage: cStorage, encryptionKey, goldBuyer, now: Number(await nowTs()) },
+      { walletAddress: privateKeyToAccount(cOwner).address, amountPerBuy: 1_000_000n, period: "week", expiresAt: Number(t0) + 30 * 86_400, dayOfWeek: 0, hourUtc: 0 },
+    );
+    const cw = await setUpWallet(cOwner, c.sessionPublicKey, c.grant, [{ target: goldBuyer, selector: ANY_SELECTOR }]);
+    await cStorage.activatePlan(c.plan.id, {
+      walletAddress: cw.wallet, publicKey: c.sessionPublicKey,
+      permissions: { calls: c.grant.permissions.calls, spend: c.grant.permissions.spend.map((s) => ({ limit: s.limit.toString(), period: s.period, token: s.token! })) },
+      expiry: c.grant.expiry,
+    });
+    await mine(5); // past the readers' confirmation lag
+    const cRunner = createRunner({
+      storage: cStorage, chain: createChainReader({ goldBuyer, goldBuyerDeployBlock: (record.goldBuyer as { block: bigint }).block, rpcUrl: rpc }),
+      executor: direct, encryptionKey, goldBuyer, recheckDelayMs: 0, sleep: async () => {},
+    });
+    const sentBefore = await pub.getTransactionCount({ address: direct.submitter });
+    const control = (await cRunner.tick()).plans[0]!;
+    expect(control).toMatchObject({ decision: "skipped", kind: "limits_mismatch" });
+    expect(control.reason).toMatch(/any function of/);
+    expect(await pub.getTransactionCount({ address: direct.submitter })).toBe(sentBefore);
+    record.runnerControlExtraWildcard = control;
   }, 300_000);
 });

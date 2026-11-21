@@ -27,10 +27,8 @@ import {
   type Hex,
 } from "viem";
 import { ATTRIBUTION_SUFFIX, type Call } from "./calls.js";
-import { CELO_CHAIN_ID } from "./constants.js";
+import { ALTANA_ORCHESTRATOR, CELO_CHAIN_ID } from "./constants.js";
 
-/** Altana Orchestrator on Celo mainnet (relay `wallet_getCapabilities`, verified source "Orchestrator" 0.5.5). */
-export const ALTANA_ORCHESTRATOR: Address = "0xAF140d0416A994Aebb3fA6212B16CE6700f09751";
 /** IthacaAccount implementation the Altana relay delegates Celo wallets to (v0.5.10). */
 export const ALTANA_ACCOUNT_IMPLEMENTATION: Address = "0x4B5d20CD8a3927B500540d9BcCDDc27385c9fA79";
 /** EIP-7702 proxy Altana wallets on Celo delegate to (`0xef0100 ‖ proxy` is the wallet's code). */

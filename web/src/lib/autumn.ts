@@ -143,8 +143,13 @@ export interface Plan {
     keyId: `0x${string}`;
     /** The account's key hash: getKey/spendInfos/canExecutePackedInfos take it. */
     keyHash: `0x${string}`;
-    /** The only calls the key may make. */
+    /**
+     * The only calls the key may make, as the account stores them: USD₮.approve,
+     * GoldBuyer.buy, and the Orchestrator entry Altana adds to every agent key.
+     */
     calls: { label: string; contract: Address }[];
+    /** One line on the Orchestrator entry, shown under the calls. */
+    callsNote: string;
   };
 }
 
@@ -282,7 +287,10 @@ export const CUSTODY_TEXT =
  * so it is stated as bounded by the cap rather than as impossible.
  */
 export const LIMITS_TEXT =
-  "The agent's key can only call USD₮.approve and GoldBuyer.buy, and pays relay fees in USD₮. Everything it spends, fees included, is bounded by the cap.";
+  "The agent's key can only call USD₮.approve and GoldBuyer.buy, plus Altana's Orchestrator, which Altana adds to every agent key and which cannot move funds. It pays relay fees in USD₮. Everything it spends, fees included, is bounded by the cap.";
+/** The Orchestrator entry of the agent key's allowlist, in one line (docs/direct-submit.md, "The Orchestrator entry"). */
+export const ORCHESTRATOR_ENTRY_TEXT =
+  "Altana adds the Orchestrator entry to every agent key for its execution path. It cannot move your funds; spending stays within the cap.";
 export const PLAN_PERIODS: readonly PlanPeriod[] = ["week", "day"];
 
 export const WEEK_MS = 7 * 24 * 3600 * 1000;

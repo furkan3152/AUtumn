@@ -15,7 +15,11 @@ Until this run is done, none of these has happened on any chain:
 3. The KeyStore registration fee actually charged in CELO, and whether the
    relay's quote matches the 2 × fee × 1.1 the app shows for a first grant.
 4. The account storing exactly our cap, period (day or week), allowlist and
-   expiry, so `sessionLimitsMismatch` passes.
+   expiry, so `sessionLimitsMismatch` passes. The allowlist must be
+   USD₮.approve, GoldBuyer.buy and the Orchestrator any-selector entry that
+   the SDK adds (docs/direct-submit.md, "The Orchestrator entry"); this shape
+   is taken from four live Celo session keys and the fork, not from our own
+   grant.
 5. `registerAgentIdentity` for a passkey wallet (ERC-8004).
 6. A purchase through `GoldBuyer.buy` sent by the relay with our session key.
 7. The relay fee drawn from the session's USD₮ cap, and its size.

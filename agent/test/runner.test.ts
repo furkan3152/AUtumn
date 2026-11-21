@@ -230,7 +230,15 @@ describe("runner", () => {
     const { runner, executor, chain } = await setup();
     chain.allowedCalls = [...chain.allowedCalls, { target: GOLD_BUYER, selector: "0xdeadbeef" }];
     expect(await only(runner)).toMatchObject({ decision: "skipped", reason: expect.stringMatching(/allowlist/) });
-    chain.allowedCalls = chain.allowedCalls.slice(0, 2);
+    chain.allowedCalls = chain.allowedCalls.slice(0, 3);
+    // Any function of GoldBuyer instead of buy: only the pinned Orchestrator may carry the any-selector wildcard.
+    const base = chain.allowedCalls;
+    chain.allowedCalls = [base[0]!, { target: GOLD_BUYER, selector: "0x32323232" }, base[2]!];
+    expect(await only(runner)).toMatchObject({ decision: "skipped", reason: expect.stringMatching(/any function of/) });
+    // Without the Orchestrator entry the allowlist is not what a real grant stores.
+    chain.allowedCalls = base.slice(0, 2);
+    expect(await only(runner)).toMatchObject({ decision: "skipped", reason: expect.stringMatching(/allowlist differs/) });
+    chain.allowedCalls = base;
     chain.cap = 99_000_000n;
     expect(await only(runner)).toMatchObject({ decision: "skipped", reason: expect.stringMatching(/weekly cap differs/) });
     chain.cap = 5_050_000n;

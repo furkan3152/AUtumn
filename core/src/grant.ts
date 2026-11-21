@@ -1,11 +1,36 @@
-import { getAddress, type Address, type Hex } from "viem";
+import { getAddress, toFunctionSelector, type Address, type Hex } from "viem";
 import type { CallPermission, SerializedSession, SessionPermissions, SpendPermission } from "@altananetwork/sdk";
-import { USDT } from "./constants.js";
+import { ALTANA_ORCHESTRATOR_BY_CHAIN, ANY_SELECTOR, CELO_CHAIN_ID, USDT } from "./constants.js";
 import { isPlanPeriod, type PlanPeriod } from "./period.js";
 
-/** The selectors the session may call, and nothing else. */
+/** The two calls a plan asks the session for. */
 export const APPROVE_SIGNATURE = "approve(address,uint256)";
 export const BUY_SIGNATURE = "buy(uint256,uint256)";
+
+/** One `(target, selector)` entry of the account's allowlist (`canExecutePackedInfos`). */
+export type AllowlistEntry = { target: Address; selector: Hex };
+
+/**
+ * The allowlist the account will really store for a plan's session key:
+ * USD₮.approve, GoldBuyer.buy, and the Orchestrator with any selector.
+ *
+ * The third entry is not in what we ask for. Porto, under the Altana SDK,
+ * appends `{to: orchestrator, selector: anySelector}` to every session key it
+ * authorizes (porto 0.2.37 `src/viem/Key.ts` lines 1110-1115, orchestrator
+ * from the relay's capabilities in `RelayActions.ts` lines 211-223). Every
+ * live Celo session key we read carries it. It cannot move the wallet's funds
+ * (docs/direct-submit.md, "The Orchestrator entry"), so it is accepted, but
+ * only for the pinned Orchestrator of the chain.
+ */
+export function expectedOnchainAllowlist(goldBuyer: Address, chainId: number = CELO_CHAIN_ID): AllowlistEntry[] {
+  const orchestrator = ALTANA_ORCHESTRATOR_BY_CHAIN[chainId];
+  if (!orchestrator) throw new Error(`no Altana Orchestrator is pinned for chain ${chainId}`);
+  return [
+    { target: getAddress(USDT), selector: toFunctionSelector(APPROVE_SIGNATURE) },
+    { target: getAddress(goldBuyer), selector: toFunctionSelector(BUY_SIGNATURE) },
+    { target: getAddress(orchestrator), selector: ANY_SELECTOR },
+  ];
+}
 
 /**
  * Default per-purchase allowance for the relay fee, which a session paying in
@@ -38,6 +63,7 @@ export type Plan = {
 };
 
 export type SessionGrant = {
+  /** What we ask `grantSession` for (and what the SDK's serialized session carries). */
   permissions: SessionPermissions & {
     calls: readonly CallPermission[];
     spend: readonly SpendPermission[];
@@ -51,6 +77,8 @@ export type SessionGrant = {
   periodCap: bigint;
   /** The part of the cap that is fee allowance. */
   feeAllowance: bigint;
+  /** The allowlist the account will store: `permissions.calls` plus the Orchestrator entry Porto adds. */
+  onchainCalls: readonly AllowlistEntry[];
 };
 
 export function buysPerPeriod(plan: Pick<Plan, "dipBuy">): number {
@@ -93,7 +121,9 @@ export function validatePlan(plan: Plan, nowSecs: number): void {
  *   allowance) × purchases per period. Because USD₮ already has a cap, the
  *   SDK adds no separate daily fee cap, and relay fees come out of this cap
  *   (derisk RESULTS.md §3.4).
- * - calls: USD₮.approve and GoldBuyer.buy, nothing else.
+ * - calls: USD₮.approve and GoldBuyer.buy, nothing else. Onchain the account
+ *   also stores the Orchestrator entry Porto adds to every session key
+ *   (`onchainCalls`, see expectedOnchainAllowlist).
  * - expiry, and feeToken USD₮.
  *
  * Pass the result as `{ ...grant.permissions, expiry, feeToken }` to
@@ -120,10 +150,18 @@ export function planToSessionGrant(plan: Plan, goldBuyer: Address, nowSecs: numb
     buysPerPeriod: n,
     periodCap,
     feeAllowance,
+    onchainCalls: expectedOnchainAllowlist(goldBuyer),
   };
 }
 
-/** The serialized session the agent expects to hold for a plan, given the wallet and session key. */
+/**
+ * The serialized session the agent expects to hold for a plan, given the
+ * wallet and session key. This is the SDK's `serializeSession` shape, which
+ * carries the permissions we asked for: Porto adds the Orchestrator entry
+ * only when it builds the relay request (`Key.toRelay`), so it never appears
+ * here. The account's real allowlist is `grant.onchainCalls`, and
+ * sessionLimitsMismatch compares the chain against that.
+ */
 export function expectedSerializedSession(grant: SessionGrant, walletAddress: Address, publicKey: Hex): SerializedSession {
   return {
     walletAddress: getAddress(walletAddress),

@@ -172,7 +172,11 @@ Files:
   3. sign;
   4. preflight `eth_call` of the exact transaction (`err` must be 0);
   5. estimate gas and check the agent's CELO;
-  6. send (one at a time per process);
+  6. send, holding the agent EOA's send lock: read its pending nonce, send
+     with that nonce, wait (up to 15 s) until the RPC counts it. In
+     production the lock is a Postgres advisory lock per EOA
+     (`agent/src/sendLock.ts`), so overlapping ticks in different processes
+     take turns; without a pool it is an in-process queue;
   7. read the receipt: `CONFIRMED` only when `Bought(wallet)` is in it.
 
   `quote()` runs the simulation and returns fee 0. Refusals before sending
@@ -199,8 +203,21 @@ Run of 2026-11-21:
 Session state on the account after the grant:
 
 - active, and KeyStore valid;
-- allowlist: USD₮ `approve`, GoldBuyer `buy`, and Orchestrator `0x32323232`;
+- allowlist: USD₮ `approve`, GoldBuyer `buy`, and Orchestrator `0x32323232`
+  (the shape of every live Celo session key; see "The Orchestrator entry");
 - one USD₮ cap of 1.05 per week, the plan's 1 USD₮ plus its fee allowance.
+
+Run of 2026-11-21 20:48 UTC (fork block 83,393,351), after the verification
+fix: core's `sessionLimitsMismatch` accepts this allowlist, and signed
+session intents that try to use the Orchestrator entry fail in the
+preflight `eth_call` (nothing sent):
+
+| Probe (session key, batch) | `execute` result |
+|---|---|
+| 1 CELO to the Orchestrator, empty calldata (`receive`) | `NoSpendPermissions` (no CELO limit on the key) |
+| 1 CELO with `withdrawTokens(0, attacker, 0)` | `CallError` (not payable; batch reverts) |
+| `USD₮.approve(attacker, 2 USD₮)` + `withdrawTokens(USD₮, attacker, 0)` | `ExceededSpendLimit` (the approval counts against the 1.05 cap) |
+| `withdrawTokens(USD₮, attacker, 0)` alone | success: the entry works, and moves only the Orchestrator's own balance (zero) |
 
 | Scenario | Fork tx | Gas | Result |
 |---|---|---|---|
@@ -210,6 +227,7 @@ Session state on the account after the grant:
 | 3a. After revoke (tx `0x891c0c88…01fa7`, account revoke + KeyStore `revokeKey`) | none | – | refused before sending: `KeyDoesNotExist` → `session_ended`; KeyStore `isValidKey` false |
 | 3b. Same, forced | `0x9685ef08246a12a19edfb4b58b5ec16d984adb87a7ec14c9a6d276d559926978` | 61,623 | `err=VerificationError (0xfbcb0b34)`, `incremented=false`, USD₮ unchanged |
 | 4. Runner + direct executor (second wallet) | `0x9d1a272c09729f5c02de1774bbc13ef345514601e9bb830984a5ba22e8968acd` | 314,118 | tick 1: `bought`, attempt `bought`; tick 2: `already_bought` with the same hash |
+| 4 (20:48 run). Same, on a real-shaped grant (Orchestrator entry included) | `0x70490fe320d84009b3060ffebba47b974062acc317c4a4c6fb5f95c1b503e067` | – | tick 1: `bought`; tick 2: `already_bought`. Control wallet with any-function on GoldBuyer as well: `skipped` / `limits_mismatch` ("lets it call any function of GoldBuyer"), nothing sent |
 
 Attribution on the scenario 1 transaction (input 1,767 bytes; last 35 bytes
 `0x63656c6f…8021`):
@@ -246,7 +264,7 @@ every value above.
   mainnet session keys, including the Orchestrator any-selector entry:
   - KeyStoreController `initialRegisterKey` (admin) and `registerKey`
     (session), paying the real fee plus 10%;
-  - `authorize`, 3× `setCanExecute` and `setSpendLimit`.
+  - `authorize`, 3× `setCanExecute` (`grant.onchainCalls`) and `setSpendLimit`.
 
   The relay's exact call order and encoding are not reproduced.
 - **USD₮ came from a storage write** (balance mapping slot 51). The wallet got
@@ -259,28 +277,35 @@ every value above.
 
 ## 4. Findings, risks and unknowns for a mainnet run
 
-1. **The real grant will make the runner refuse, on both paths.**
-   - Porto adds `{to: Orchestrator, selector: 0x32323232}` to every session
-     key (`porto/src/viem/Key.ts` 1110; `RelayActions.ts` 218). The four live
-     Celo sessions we read all carry it.
-   - `sessionLimitsMismatch` (core/src/verify.ts) requires exactly
-     {approve, buy}.
-   - Fork proof: the runner answered `skipped` / `limits_mismatch` on the
-     mainnet-shaped wallet.
-   - This needs a deliberate fix in core before any mainnet run. It is not
-     changed here.
-2. **Who gets credited:**
+1. **Fixed: the real grant made the runner refuse.** Porto adds
+   `{to: Orchestrator, selector: 0x32323232}` to every session key, and
+   `sessionLimitsMismatch` required exactly {approve, buy}. Verification now
+   expects exactly {USD₮.approve, GoldBuyer.buy, pinned Orchestrator
+   any-selector} (`expectedOnchainAllowlist`, core/src/grant.ts) in the
+   browser, at server activation and in the runner. See "The Orchestrator
+   entry" below for why that entry is safe.
+2. **Who gets credited: not confirmed.**
    - `from` is the agent EOA and `to` is the Orchestrator.
    - `verifyTx` returns codes only, with no sender, for tail tags.
-   - Whether Celo's dashboard credits the project for transactions sent by
-     the agent EOA is unknown.
-3. **Mempool copying:** anyone who sees the signed intent can submit it
-   without the tag (see the table above). The purchase still counts once;
-   only the tag is lost. Whether Celo's sequencer mempool is public was not
-   checked.
-4. **One EOA per process:** the send lock is in-process only. Overlapping cron
-   instances sharing one agent EOA can collide on its transaction nonce. The
-   runner then reports `ambiguous` and settles from the chain later.
+   - Whether Celo's dashboard credits the project for a transaction whose
+     outer sender is the agent EOA (not the user's wallet) is not confirmed.
+     Ask Celo before counting on it.
+3. **Someone else can submit our signed intent without the tag.** The intent
+   is permissionless: anyone who sees it (in the mempool, or from an RPC
+   provider) can submit it first. The purchase still happens exactly once,
+   because the intent's nonce can be used once; our own transaction then gets
+   `InvalidNonce` and costs only gas. Only the tag is lost. Whether Celo's
+   mempool is public was not checked.
+4. **Fixed: one EOA, several processes.** Sends from the agent EOA now hold
+   a Postgres advisory lock per EOA (`pg_advisory_xact_lock`, transaction
+   level so it works through Neon's pooled URL) around nonce read, send and
+   a short wait for the RPC to count the transaction. A lock that cannot be
+   taken within 60 s refuses the purchase before sending (`bought: "no"`).
+   Tested against a real Postgres with two pools
+   (`agent/test/sendLock.test.ts`). If the RPC never shows the transaction
+   within 15 s the lock is released anyway; the worst case is then the old
+   one (a nonce clash, which the runner reports as `ambiguous` and settles
+   from the chain).
 5. **Costs:** the agent EOA needs CELO (about 314k gas per buy). The wallet's
    cap no longer pays a relay fee.
 6. **Not tried here:** IthacaAccount also accepts a direct ERC-7821
@@ -288,3 +313,77 @@ every value above.
    signed over `computeDigest(calls, nonce)` (IthacaAccount.sol 706–720, the
    "Execute" typehash at line 187). With it, the outer `to` would be the
    user's wallet itself, also with the tag at the end.
+
+## The Orchestrator entry
+
+Every Altana session key on Celo carries a fourth kind of allowlist entry
+that we never asked for: the Orchestrator with "any function".
+
+### Facts
+
+- **What is added.** `Key.toRelay` in porto 0.2.37 (the version
+  `@altananetwork/sdk` 1.1.0 pins) appends
+  `{type: "call", to: orchestrator, selector: Call.anySelector}` to every key
+  with `role === "session"` (`porto/src/viem/Key.ts` lines 1110–1115).
+  `Call.anySelector` is `0x32323232` (`src/core/internal/call.ts`), the same
+  value as GuardedExecutor's `ANY_FN_SEL` (GuardedExecutor.sol line 135).
+  The account stores it as the packed word
+  `0xaf140d0416a994aebb3fa6212b16ce6700f09751000000000000000032323232`.
+- **Which address.** `orchestrator` is `contracts.orchestrator.address` from
+  the relay's `wallet_getCapabilities` (`RelayActions.ts` lines 211–223 and
+  376–391). For `0xa4ec` the relay returns
+  `0xAF140d0416A994Aebb3fA6212B16CE6700f09751` (v0.5.5) and an empty
+  `legacyOrchestrators` (read 2026-11-21). It is also the immutable
+  `ORCHESTRATOR()` of the account implementation (IthacaAccount.sol line
+  226; checked read-only in `core/test/integration/intent.test.ts`). A relay
+  that moved to a new Orchestrator would change this address, and our check
+  would then refuse the new keys until the pin is updated.
+- **Live keys.** All four session keys found on Celo mainnet (three wallets,
+  found from `IntentExecuted` logs, block 83,392,655) carry exactly this word,
+  the same address on every wallet. Their raw `canExecutePackedInfos` and
+  `spendInfos` are in `core/test/fixtures/mainnet-session-allowlists.json`.
+- **Why Porto adds it.** The code says only "temporary": it was introduced
+  as `// TODO(relay): remove temporary call scope on EntryPoint.` (porto
+  commit 793f4e7, 2025-03-27; renamed to Orchestrator in ca969a4,
+  2025-05-21). Nothing in the current execution path needs it: the
+  Orchestrator calls the account (`execute`, `pay`), never the other way
+  round. We cannot remove it without changing the SDK, so we accept it.
+
+### What a session-key holder can do with it
+
+The entry lets the wallet itself (msg.sender = the wallet) call any function
+of the Orchestrator inside a session batch. The verified Orchestrator 0.5.5
+reads `msg.sender` in one place only (line 426) and never pulls tokens from
+its caller. Its external functions:
+
+| Function (Orchestrator.sol) | Called as the wallet |
+|---|---|
+| `withdrawTokens(token, recipient, amount)` (154) | Anyone may already call it. It sends the Orchestrator's own balance, not the wallet's. With a `token` the attacker controls, it calls that contract, which then runs in the middle of the batch (see approvals below). |
+| `executePreCalls(parentEOA, preCalls)` (160) | Anyone may already call it. Each pre-call needs a valid signature of a key of its `eoa` (166). One signed by the session key runs under that key's own guards again. |
+| `execute(bytes)` / `execute(bytes[])` (197, 210) | `nonReentrant`, and the guard is on for every chain (`_useTransientReentrancyGuardOnlyOnMainnet` returns false, 844–852). Inside a relayed or direct intent it reverts. Outside one (a session batch sent through the account's own ERC-7821 path), it runs another intent, which anyone could submit anyway; that intent's calls and payment are again checked against the signing key's guards. |
+| `simulateExecute(...)` (235) | Always reverts, unless `tx.origin` holds at least 2^192 wei of CELO, which is impossible on chain. |
+| `selfCallPayVerifyCall537021665()` (425) | `require(msg.sender == address(this))`: reverts. |
+| `receive()` (821) | Payable, empty calldata: allowed by the any-selector entry. See native value below. |
+
+What bounds every one of these:
+
+- **Native CELO.** Every call value in a session batch is summed (GuardedExecutor.sol line 254) and charged to the key's native limit after the batch (311). Our keys have no native limit, so any value reverts `NoSpendPermissions` (644). A relay or nested intent paying its fee in CELO is charged the same way (IthacaAccount.sol 669). Verification refuses a key with a native (or any non-USD₮) limit. Fork probe: 1 CELO to the Orchestrator reverts `NoSpendPermissions`.
+- **The wallet's tokens.** The Orchestrator has no path that moves the caller's tokens. A contract that gains control mid-batch (via `withdrawTokens`) can pull only what the wallet has approved to it. The only approval the key can make is `USD₮.approve`, whose amount is charged to the USD₮ cap (GuardedExecutor.sol 275–281, and with the balance drop, 331–344) and reset to zero after the batch (318). Fork probe: approving an attacker for 2 USD₮ next to an Orchestrator call reverts `ExceededSpendLimit` against the 1.05 cap. XAUt0 and other tokens have no cap, so the key cannot approve or transfer them, and the Orchestrator never pulls them.
+- **Account authority.** The account trusts the Orchestrator only for intents and pre-calls whose signature it verified, with that signer's key hash (IthacaAccount.sol 633 and 687). Calling the Orchestrator gives the session key no other key's authority.
+
+**Conclusion: the entry is safe for Autumn.** A stolen session key cannot use
+it to move the owner's funds beyond the cap, or anywhere it could not already
+send them. It does add one route to the loss we already state: with a
+same-batch USD₮ approval and a contract of its own called back through
+`withdrawTokens`, a thief can take USD₮ up to the cap's remaining room. The
+relay fee field already allowed exactly that amount (README, "How it
+works"), so the bound is unchanged: the cap, not the allowlist.
+
+The check therefore accepts exactly {USD₮.approve, GoldBuyer.buy, pinned
+Orchestrator any-selector}. It refuses a missing or duplicated entry, any
+other extra entry, a wildcard target (`0x3232…3232`), and the any-selector on
+any other address (core/test/unit/verify.test.ts; runner and fork tests).
+
+Not checked by us, as before this change: `callCheckerInfos` (a call checker
+would widen a key without appearing in the allowlist) and entries stored
+under `ANY_KEYHASH` for all keys. Only the passkey admin can set either.

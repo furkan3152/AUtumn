@@ -8,6 +8,7 @@
 import { USDT as USDT_TOKEN, checkDestination, maxSendable, type SendAsset } from "@autumn/core";
 import {
   DECIMALS,
+  ORCHESTRATOR_ENTRY_TEXT,
   WEEK_MS,
   draftLimits,
   nextResetUtc,
@@ -88,7 +89,9 @@ function makePlan(input: Omit<PlanInput, "expiresAt">, startedAt: Date, nextPurc
       calls: [
         { label: "USD₮.approve", contract: "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e" },
         { label: "GoldBuyer.buy", contract: PREVIEW_GOLD },
+        { label: "Altana Orchestrator (any function)", contract: "0xAF140d0416A994Aebb3fA6212B16CE6700f09751" },
       ],
+      callsNote: ORCHESTRATOR_ENTRY_TEXT,
     },
     limits: {
       period: input.period,

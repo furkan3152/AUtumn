@@ -25,6 +25,22 @@ export const UNISWAP_V3_FACTORY: Address = "0xAfE208a311B21f13EF87E33A90049fC17A
 export const SWAP_ROUTER_02: Address = "0x5615CDAb10dc425a742d643d949a7F474C01abc4";
 export const QUOTER_V2: Address = "0x82825d0554fA07f7FC52Ab63c961F330fdEFa8E8";
 
+/**
+ * Altana Orchestrator on Celo mainnet: relay `wallet_getCapabilities` for
+ * 0xa4ec (`contracts.orchestrator`, v0.5.5, no legacy orchestrators, read
+ * 2026-11-21), verified source "Orchestrator" 0.5.5 on Sourcify, and the
+ * immutable `ORCHESTRATOR()` of the account implementation every Altana
+ * wallet on Celo delegates to.
+ */
+export const ALTANA_ORCHESTRATOR: Address = "0xAF140d0416A994Aebb3fA6212B16CE6700f09751";
+
+/** The Orchestrator a session key's allowlist may name, per chain. Only Celo mainnet is supported. */
+export const ALTANA_ORCHESTRATOR_BY_CHAIN: Readonly<Record<number, Address>> = { [CELO_CHAIN_ID]: ALTANA_ORCHESTRATOR };
+
+/** GuardedExecutor wildcards (IthacaAccount 0.5.10, GuardedExecutor.sol lines 132 and 135; Porto `Call.anyTarget` / `Call.anySelector`). */
+export const ANY_TARGET: Address = "0x3232323232323232323232323232323232323232";
+export const ANY_SELECTOR = "0x32323232" as const;
+
 /** Altana KeyStore on Celo mainnet (from @altananetwork/sdk 1.1.0 `CELO.keyStore`). */
 export const ALTANA_KEYSTORE: Address = "0x83b30935f36d6ccf9B1ec3b5E47F2866b97cd27c";
 

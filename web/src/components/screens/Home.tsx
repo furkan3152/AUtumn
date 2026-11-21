@@ -423,7 +423,8 @@ const TX_NOUN: Record<ActivityItem["kind"], string> = {
 
 /**
  * What anyone can check onchain: the agent's key in Altana's Keystore, the
- * two calls it may make, its cap, period and expiry, and the agent identity.
+ * calls it may make (our two plus the Orchestrator entry Altana adds), its
+ * cap, period and expiry, and the agent identity.
  * A <details> so it stays out of the way on a phone; open by default on wide screens.
  */
 function OnchainProof({ state }: { state: AutumnState }) {
@@ -453,14 +454,15 @@ function OnchainProof({ state }: { state: AutumnState }) {
           <div>
             <dt>May call</dt>
             <dd>
-              {plan.proof.calls.map((c, i) => (
+              {plan.proof.calls.map((c, i, all) => (
                 <span key={c.label}>
-                  {i > 0 ? " and " : ""}
+                  {i === 0 ? "" : i === all.length - 1 ? " and " : ", "}
                   <ExtLink href={addressUrl(c.contract)} label={`${c.label}: open the contract ${c.contract} on Celoscan`}>
                     {c.label}
                   </ExtLink>
                 </span>
               ))}
+              <span className="proof__note muted small">{plan.proof.callsNote}</span>
             </dd>
           </div>
           <div>

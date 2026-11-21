@@ -1,0 +1,126 @@
+{
+  "source": "Celo mainnet (chain 42220), read-only eth_call via https://forno.celo.org: getKeys(), canExecutePackedInfos(keyHash), spendInfos(keyHash), ORCHESTRATOR() on each wallet. Wallets found from Orchestrator IntentExecuted logs. Not our wallets.",
+  "block": 83392655,
+  "readOn": "2026-11-21",
+  "orchestrator": "0xAF140d0416A994Aebb3fA6212B16CE6700f09751",
+  "sessions": [
+    {
+      "wallet": "0x5aeC9aC78bb3E045d2f85e311aD3385B8116d0c5",
+      "walletCode": "0xef0100c0f16888f4198f53892c53af859f673e23f26fa3",
+      "accountOrchestrator": "0xAF140d0416A994Aebb3fA6212B16CE6700f09751",
+      "keyHash": "0xed710dab4132ed393917fa0b9c390ec7fd849f3df3e860df46ada44b15857337",
+      "expiry": 1795829361,
+      "keyType": 2,
+      "canExecutePackedInfos": [
+        "0xaf140d0416a994aebb3fa6212b16ce6700f09751000000000000000032323232",
+        "0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e0000000000000000a9059cbb"
+      ],
+      "spendInfos": [
+        {
+          "token": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+          "period": 2,
+          "limit": "5000000"
+        }
+      ]
+    },
+    {
+      "wallet": "0x5aeC9aC78bb3E045d2f85e311aD3385B8116d0c5",
+      "walletCode": "0xef0100c0f16888f4198f53892c53af859f673e23f26fa3",
+      "accountOrchestrator": "0xAF140d0416A994Aebb3fA6212B16CE6700f09751",
+      "keyHash": "0x919130a12f74c561d78f64afd4d6e2b65bf1e2c7f446d86a817051a44240f0f0",
+      "expiry": 1795837349,
+      "keyType": 2,
+      "canExecutePackedInfos": [
+        "0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e0000000000000000a9059cbb",
+        "0xaf140d0416a994aebb3fa6212b16ce6700f09751000000000000000032323232"
+      ],
+      "spendInfos": [
+        {
+          "token": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+          "period": 2,
+          "limit": "5000000"
+        }
+      ]
+    },
+    {
+      "wallet": "0x22d66bD658ad8b5269998545719941479ef4478d",
+      "walletCode": "0xef0100c0f16888f4198f53892c53af859f673e23f26fa3",
+      "accountOrchestrator": "0xAF140d0416A994Aebb3fA6212B16CE6700f09751",
+      "keyHash": "0x6fb8d26f8c99653a885bf509b315d86f2f72ab81a00c79ed55d6b90ce3ea0717",
+      "expiry": 1796396492,
+      "keyType": 2,
+      "canExecutePackedInfos": [
+        "0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e0000000000000000095ea7b3",
+        "0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e0000000000000000a9059cbb",
+        "0xa9aa0a64769cbed4d3b1ceb4df01cde915c235b3000000000000000032323232",
+        "0xf6829d7393dae24509eb1e52ee8e572e2e271a4f0000000000000000a9059cbb",
+        "0x18bc5bcc660cf2b9ce3cd51a404afe1a0cbd3c220000000000000000a9059cbb",
+        "0xaf140d0416a994aebb3fa6212b16ce6700f09751000000000000000032323232"
+      ],
+      "spendInfos": [
+        {
+          "token": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+          "period": 3,
+          "limit": "15000000"
+        },
+        {
+          "token": "0xF6829D7393dAe24509eb1E52eE8e572e2E271a4f",
+          "period": 3,
+          "limit": "25000000000"
+        },
+        {
+          "token": "0x18Bc5bcC660cf2B9cE3cd51a404aFe1a0cBD3C22",
+          "period": 3,
+          "limit": "25000000"
+        }
+      ]
+    },
+    {
+      "wallet": "0xa8dcf6a0304D27cb306830b9503F8cFcf38EFf7D",
+      "walletCode": "0xef0100c0f16888f4198f53892c53af859f673e23f26fa3",
+      "accountOrchestrator": "0xAF140d0416A994Aebb3fA6212B16CE6700f09751",
+      "keyHash": "0x5b29d28e61f7ec83cfc396d2e38d37ccfa221a3483dee4c761b99df7db41ac77",
+      "expiry": 1797736169,
+      "keyType": 2,
+      "canExecutePackedInfos": [
+        "0x5615cdab10dc425a742d643d949a7f474c01abc4000000000000000032323232",
+        "0x3e59a31363e2ad014dcbc521c4a0d5757d9f3402000000000000000032323232",
+        "0x777a8255ca72412f0d706dc03c9d1987306b4cad000000000000000032323232",
+        "0x8004a169fb4a3325136eb29fa0ceb6d2e539a43200000000000000008ea42286",
+        "0x8004a169fb4a3325136eb29fa0ceb6d2e539a43200000000000000000af28bd3",
+        "0xceba9300f2b948710d2653dd7b07f33a8b32118c0000000000000000095ea7b3",
+        "0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e0000000000000000095ea7b3",
+        "0x765de816845861e75a25fca122bb6898b8b1282a0000000000000000095ea7b3",
+        "0x471ece3750da237f93b8e339c536989b8978a4380000000000000000095ea7b3",
+        "0xaf140d0416a994aebb3fa6212b16ce6700f09751000000000000000032323232"
+      ],
+      "spendInfos": [
+        {
+          "token": "0x0000000000000000000000000000000000000000",
+          "period": 3,
+          "limit": "879543369000000000000"
+        },
+        {
+          "token": "0xcebA9300f2b948710d2653dD7B07f33A8B32118C",
+          "period": 3,
+          "limit": "50000000"
+        },
+        {
+          "token": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+          "period": 3,
+          "limit": "50000000"
+        },
+        {
+          "token": "0x765DE816845861e75A25fCA122bb6898B8B1282a",
+          "period": 3,
+          "limit": "50000000000000000000"
+        },
+        {
+          "token": "0x471EcE3750Da237f93B8E339c536989b8978a438",
+          "period": 3,
+          "limit": "879543369000000000000"
+        }
+      ]
+    }
+  ]
+}

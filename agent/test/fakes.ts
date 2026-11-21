@@ -4,6 +4,8 @@
 import { getAddress, keccak256, toFunctionSelector, toHex, type Address, type Hex } from "viem";
 import type { ExecuteResult, SerializedSession } from "@altananetwork/sdk";
 import {
+  ALTANA_ORCHESTRATOR,
+  ANY_SELECTOR,
   decodeBuyCalls,
   priceUsdtPerXaut,
   sessionKeyIds,
@@ -37,6 +39,8 @@ export class FakeChain implements ChainReader {
   allowedCalls: { target: Address; selector: Hex }[] = [
     { target: getAddress(USDT), selector: toFunctionSelector("approve(address,uint256)") },
     { target: GOLD_BUYER, selector: toFunctionSelector("buy(uint256,uint256)") },
+    // Added by the SDK's Porto layer to every real session key (core expectedOnchainAllowlist).
+    { target: getAddress(ALTANA_ORCHESTRATOR), selector: ANY_SELECTOR },
   ];
   sessionReads = 0;
   /** The spend period the fake account meters the session's USD₮ cap over. */

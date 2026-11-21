@@ -9,8 +9,9 @@ are public and enforced onchain: anyone can read them, and nobody, Autumn
 included, can raise them without your passkey.
 
 The agent works from a session key that the chain limits to a weekly or daily
-USD₮ cap (fees included), to two calls (`USD₮.approve` and `GoldBuyer.buy`),
-and to an expiry date. Stopping it is one onchain revoke, approved with your
+USD₮ cap (fees included), to two calls (`USD₮.approve` and `GoldBuyer.buy`)
+plus the Altana Orchestrator entry that Altana adds to every agent key (it
+cannot move funds, see below), and to an expiry date. Stopping it is one onchain revoke, approved with your
 passkey, for a small network fee. You can send your USD₮, gold and CELO out at
 any time.
 
@@ -36,7 +37,13 @@ track.
 3. The agent buys gold on schedule through `GoldBuyer`, a small contract with
    no owner that can only swap USD₮ for XAUt0 and send it back to the caller.
    The session key can only call `USD₮.approve` and `GoldBuyer.buy`, and pays
-   relay fees in USD₮. Everything it spends, fees included, is bounded by the
+   relay fees in USD₮. Altana's SDK also gives every session key "any
+   function" on Altana's Orchestrator contract. Autumn accepts that entry only
+   for the Orchestrator pinned in `core/src/constants.ts`, and refuses a key
+   with any other extra entry or wildcard. Called from the wallet, the
+   Orchestrator cannot take the wallet's tokens, and the key has no CELO
+   allowance, so the entry adds no way to move funds beyond the cap
+   ([direct-submit.md, "The Orchestrator entry"](docs/direct-submit.md#the-orchestrator-entry)). Everything it spends, fees included, is bounded by the
    cap. (The relay fee is part of the signed intent, and the account pays it
    to whoever submits the intent: a leaked key could send up to the cap's
    remaining room as "fees". The cap is the bound, not the allowlist.) Before
@@ -60,7 +67,15 @@ track.
   send; your funds stay in your wallet.
 - **Attribution.** Our ERC-8021 tag is attached to every agent call, but
   Celo's checker does not credit tags inside a relayed transaction today
-  ([RESULTS section 7](docs/altana-spike/RESULTS.md)).
+  ([RESULTS section 7](docs/altana-spike/RESULTS.md)). The opt-in direct
+  submitter (`AUTUMN_SUBMITTER=direct`, [docs/direct-submit.md](docs/direct-submit.md))
+  puts the tag at the end of the outer transaction, where `verifyTx` reads
+  it, with two caveats:
+  - Whether Celo's dashboard credits a transaction whose outer sender is our
+    agent EOA (not the user's wallet) is not confirmed.
+  - Anyone who sees a signed intent before it is mined can submit it
+    themselves without the tag. The purchase still happens exactly once
+    (the intent's nonce is used once); only the tag is lost.
 - **Pool price history.** The USD₮/XAUt0 pool keeps one price observation, so
   GoldBuyer's 30-minute average check reverts for 30 minutes after any swap
   in the pool. The agent then says "Price check not available right now" and
@@ -186,7 +201,9 @@ mainnet. Reading needs no funds. A plan needs a funded wallet; see
   reads purchase history once from the oldest point it needs, and returns
   within 240 seconds, leaving any plans it did not reach for the next run.
   Two runs at once cannot buy twice: each purchase is claimed in Postgres
-  first.
+  first. With the direct submitter, two runs sharing the agent EOA also take
+  turns sending (a Postgres advisory lock per EOA), so they never reuse its
+  transaction nonce.
 
 ### How the server knows a request comes from the wallet owner
 

@@ -955,6 +955,11 @@ body:has(.landing) .header {
   word-break: break-all;
 }
 
+.proof__note {
+  display: block;
+  margin-top: 4px;
+}
+
 .callout {
   padding: 10px 12px;
   background: var(--paper-hi);

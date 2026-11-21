@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { getAddress, toFunctionSelector, type Address } from "viem";
-import { USDT } from "../../src/constants.js";
+// The SDK's own Porto layer (porto 0.2.37, a dependency of @altananetwork/sdk): what it really asks the relay to authorize.
+import * as PortoKey from "porto/viem/Key";
+import { ALTANA_ORCHESTRATOR, ANY_SELECTOR, USDT } from "../../src/constants.js";
 import {
   APPROVE_SIGNATURE,
   BUY_SIGNATURE,
@@ -32,6 +34,21 @@ describe("planToSessionGrant", () => {
     ]);
     expect(toFunctionSelector(APPROVE_SIGNATURE)).toBe("0x095ea7b3");
     expect(toFunctionSelector(BUY_SIGNATURE)).toBe(toFunctionSelector("function buy(uint256 amountIn, uint256 minOut)"));
+  });
+
+  it("expects onchain exactly what Porto will authorize: the two calls plus the Orchestrator any-selector entry", () => {
+    const g = planToSessionGrant({ amountPerBuy: 5_000_000n, expiresAt: NOW + 86400 }, GB, NOW);
+    expect(g.onchainCalls).toEqual([
+      { target: getAddress(USDT), selector: "0x095ea7b3" },
+      { target: getAddress(GB), selector: toFunctionSelector(BUY_SIGNATURE) },
+      { target: getAddress(ALTANA_ORCHESTRATOR), selector: ANY_SELECTOR },
+    ]);
+    // Porto's Key.toRelay, with the orchestrator the relay's capabilities give for Celo, over our requested permissions.
+    const key = PortoKey.fromSecp256k1({ address: WALLET, role: "session", expiry: g.expiry, permissions: g.permissions });
+    const relay = PortoKey.toRelay(key, { orchestrator: ALTANA_ORCHESTRATOR });
+    const relayCalls = relay.permissions.flatMap((p) => (p.type === "call" ? [{ target: getAddress(p.to), selector: p.selector }] : []));
+    expect(relayCalls).toEqual(g.onchainCalls);
+    expect(relay.permissions.filter((p) => p.type === "spend")).toEqual([{ type: "spend", token: USDT, limit: 5_050_000n, period: "week" }]);
   });
 
   it("sets expiry and the USD₮ fee token", () => {

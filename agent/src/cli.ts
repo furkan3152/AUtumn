@@ -39,7 +39,7 @@ async function main() {
     if (!cfg.live) throw new Error("try-buy sends a transaction request: set AUTUMN_EXECUTION=live");
     const { deps, pool } = createProductionService();
     try {
-      const r = await tryBuy({ ...deps, executor: createExecutor(cfg) }, planId, BigInt(units));
+      const r = await tryBuy({ ...deps, executor: createExecutor(cfg, undefined, pool) }, planId, BigInt(units));
       console.log(json(r));
     } finally {
       await pool.end();

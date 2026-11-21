@@ -27,6 +27,7 @@ import {
   buildSendCall,
   checkDestination,
   createCeloPublicClient,
+  ALTANA_ORCHESTRATOR,
   estimateRelayFeeUsdt,
   maxSendable,
   readAgentIdMinted,
@@ -57,6 +58,7 @@ import type { CreatePlanResponse, PlanView, WalletView } from "@autumn/agent";
 import { agentStatusFor, buildActivity, currentPlan, nextPurchaseFor, planItems, purchaseItems, runLogItems } from "./activity";
 import {
   DECIMALS,
+  ORCHESTRATOR_ENTRY_TEXT,
   type Address,
   type AutumnClient,
   type AutumnState,
@@ -480,7 +482,9 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
           calls: [
             { label: "USD₮.approve", contract: USDT },
             { label: "GoldBuyer.buy", contract: cfg.goldBuyer },
+            { label: "Altana Orchestrator (any function)", contract: ALTANA_ORCHESTRATOR },
           ],
+          callsNote: ORCHESTRATOR_ENTRY_TEXT,
         },
         amount: BigInt(planView.amountPerBuy),
         period: planView.period,

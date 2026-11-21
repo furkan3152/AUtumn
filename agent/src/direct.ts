@@ -56,6 +56,7 @@ import {
   type Intent,
 } from "@autumn/core";
 import type { SessionExecutor } from "./ports.js";
+import { inProcessSendLock, SendLockError, type SendLock } from "./sendLock.js";
 
 export type DirectExecutorOptions = {
   rpcUrl: string;
@@ -74,6 +75,15 @@ export type DirectExecutorOptions = {
   receiptTimeoutMs?: number;
   /** Suffix appended to the outer calldata. Default: the project's ERC-8021 tag. */
   suffix?: Hex | null;
+  /**
+   * Serialises sends from the agent EOA (nonce read, broadcast, wait until the
+   * RPC counts it). Default: one queue per EOA in this process. Production
+   * passes `pgSendLock(pool)`, so overlapping ticks in different processes
+   * sharing the EOA take turns.
+   */
+  sendLock?: SendLock;
+  /** How long to wait inside the lock for the RPC to count a broadcast transaction, ms. Default 15 000. */
+  nonceSettleMs?: number;
   /** Test-only: send even when the preflight call says the intent fails, to show what the chain does. */
   unsafeSkipPreflight?: boolean;
   log?: (msg: string, data?: Record<string, unknown>) => void;
@@ -176,8 +186,30 @@ export function createDirectExecutor(opts: DirectExecutorOptions): DirectExecuto
   const pub = createPublicClient({ chain, transport }) as PublicClient;
   const wallet = createWalletClient({ chain, transport, account });
   let last: DirectOutcome | undefined;
-  /** One send at a time from this EOA in this process, so its transaction nonces never collide. */
-  let sendLock: Promise<unknown> = Promise.resolve();
+  const sendLock = opts.sendLock ?? inProcessSendLock;
+  const nonceSettleMs = opts.nonceSettleMs ?? 15_000;
+
+  /**
+   * Inside the send lock: the EOA's pending nonce, an explicit-nonce
+   * broadcast, then a short wait until the RPC's pending count passes that
+   * nonce, so the next holder (here or in another process) reads the next one.
+   * If the RPC does not catch up in time, the lock is released anyway: the
+   * worst case is the old behaviour (a nonce clash, which the runner reports
+   * as ambiguous and settles from the chain).
+   */
+  async function broadcast(tx: { data: Hex; gas: bigint; maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }): Promise<Hex> {
+    const nonce = await pub.getTransactionCount({ address: account.address, blockTag: "pending" }).catch((err: Error) => {
+      throw new SendLockError(`Could not read the agent EOA's nonce: ${err.message.split("\n")[0]}`);
+    });
+    const hash = await wallet.sendTransaction({ account, chain, to: orchestrator, nonce, ...tx });
+    const until = Date.now() + nonceSettleMs;
+    while (Date.now() < until) {
+      const seen = await pub.getTransactionCount({ address: account.address, blockTag: "pending" }).catch(() => nonce);
+      if (seen > nonce) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return hash;
+  }
 
   async function prepare(
     { session, privateKey, calls }: { session: SerializedSession; privateKey: Hex; calls: readonly Call[] },
@@ -305,14 +337,13 @@ export function createDirectExecutor(opts: DirectExecutorOptions): DirectExecuto
       );
     }
 
-    const send = sendLock.then(() =>
-      wallet.sendTransaction({ account, chain, to: orchestrator, data: p.data, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas }),
-    );
-    sendLock = send.catch(() => undefined);
     let txHash: Hex;
     try {
-      txHash = await send;
+      txHash = await sendLock(account.address, () =>
+        broadcast({ data: p.data, gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas }),
+      );
     } catch (err) {
+      if (err instanceof SendLockError) throw new DirectSubmitError(err.message, "relay_failure", "no");
       // The node may or may not have accepted it: only the chain can say.
       throw new DirectSubmitError(`Sending the transaction failed: ${(err as Error).message.split("\n")[0]}`, "relay_failure", "unknown");
     }

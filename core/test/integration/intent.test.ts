@@ -21,8 +21,9 @@ import {
   type Hex,
 } from "viem";
 import { createCeloPublicClient } from "../../src/client.js";
+import { ALTANA_ORCHESTRATOR } from "../../src/constants.js";
 import {
-  ALTANA_ORCHESTRATOR,
+  ALTANA_ACCOUNT_IMPLEMENTATION,
   encodeExecutionData,
   encodeIntent,
   INTENT_ABI_PARAMETER,
@@ -41,6 +42,15 @@ describe("intent encoding against a real relay transaction", () => {
     expect(d[2]).toBe("0.5.5");
     expect(d[3]).toBe(42220n);
     expect(d[4].toLowerCase()).toBe(ALTANA_ORCHESTRATOR.toLowerCase());
+  });
+
+  it("the pinned Orchestrator is the account implementation's own ORCHESTRATOR() (the session allowlist entry's target)", async () => {
+    const orch = await client.readContract({
+      address: ALTANA_ACCOUNT_IMPLEMENTATION,
+      abi: [{ type: "function", name: "ORCHESTRATOR", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] }] as const,
+      functionName: "ORCHESTRATOR",
+    });
+    expect(orch).toBe(ALTANA_ORCHESTRATOR);
   });
 
   it("decodes, re-encodes byte for byte, and the recomputed digest recovers the signing session key", async () => {

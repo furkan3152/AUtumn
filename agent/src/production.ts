@@ -4,6 +4,7 @@ import type { Hex } from "viem";
 import { createAltanaExecutor, createChainReader } from "./adapters.js";
 import { parseEncryptionKey } from "./crypto.js";
 import { createDirectExecutor } from "./direct.js";
+import { pgSendLock } from "./sendLock.js";
 import type { ChainReader, SessionExecutor } from "./ports.js";
 import { createRunner, type Runner } from "./runner.js";
 import type { ServiceDeps } from "./service.js";
@@ -62,13 +63,23 @@ export function submitterFromEnv(env: Env): Submitter {
   return { kind: "direct", key: key as Hex, ...(ttl ? { intentTtlSecs: Number(ttl) } : {}) };
 }
 
-/** The executor for the configured submitter. */
-export function createExecutor(c: ReturnType<typeof serverConfigFromEnv>, log?: (msg: string, data?: Record<string, unknown>) => void): SessionExecutor {
+/**
+ * The executor for the configured submitter. With a pool, the direct
+ * submitter takes a Postgres advisory lock per agent EOA around each send, so
+ * overlapping ticks (two cron runs, the CLI) sharing the EOA cannot reuse a
+ * transaction nonce.
+ */
+export function createExecutor(
+  c: ReturnType<typeof serverConfigFromEnv>,
+  log?: (msg: string, data?: Record<string, unknown>) => void,
+  pool?: pg.Pool,
+): SessionExecutor {
   if (c.submitter.kind === "relay") return createAltanaExecutor(c.cfg.rpcUrl);
   return createDirectExecutor({
     rpcUrl: c.cfg.rpcUrl,
     submitterKey: c.submitter.key,
     goldBuyer: c.cfg.goldBuyer,
+    ...(pool ? { sendLock: pgSendLock(pool) } : {}),
     ...(c.submitter.intentTtlSecs !== undefined ? { intentTtlSecs: c.submitter.intentTtlSecs } : {}),
     ...(log ? { log } : {}),
   });
@@ -92,7 +103,7 @@ export function createProductionRunner(env: Env = process.env, pool?: pg.Pool): 
   const runner = createRunner({
     storage: new PgStorage(p),
     chain: chainFor(c),
-    executor: c.live ? createExecutor(c, log) : null,
+    executor: c.live ? createExecutor(c, log, p) : null,
     encryptionKey: c.encryptionKey,
     goldBuyer: c.cfg.goldBuyer,
     log,
