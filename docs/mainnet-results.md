@@ -140,3 +140,20 @@ from the wallet itself. The wallet registered its ERC-8004
 identity with the passkey: agent id 10097,
 [`0x446c0bd4…aabe`](https://celoscan.io/tx/0x446c0bd4f4bb5cb2ee5b50141e3a1a2a1864b4d55fd70bff736f865c0d15aabe)
 (block 83,455,994), https://8004scan.io/agents/celo/10097.
+
+## Passkey wallets through the app, 22 Nov 2026
+
+Two wallets were created in the live app itself, in a browser, with a
+WebAuthn passkey as their only admin key, and taken through the whole user
+journey with purchases sent by the agent wallet. The passkey was held by the
+browser's virtual authenticator (Chrome DevTools WebAuthn), not by a phone,
+so these runs prove the app's screens and the passkey-signed transactions,
+not a device's fingerprint prompt.
+
+| Wallet | Plan | Purchase | What else was done |
+|---|---|---|---|
+| [`0xF4d28071177d6104aE8781034d23dc7A5Fd80b39`](https://celoscan.io/address/0xF4d28071177d6104aE8781034d23dc7A5Fd80b39) | 1 USD₮ per day | [`0x03529d95…0945`](https://celoscan.io/tx/0x03529d95e0f2aac7f74a8b8a104352fc46b9e333a6f2cd8d13abf0f603d00945) | ERC-8004 identity 10100 registered at the second passkey prompt; agent stopped from the app (revoke); XAUt0, CELO and USD₮ sent out with "Send out" |
+| [`0x91aC42021e9F8cd5d4e397825f31fD961e7DF947`](https://celoscan.io/address/0x91aC42021e9F8cd5d4e397825f31fD961e7DF947) | 1 USD₮ per day | [`0xf21ead96…2a38`](https://celoscan.io/tx/0xf21ead966fc6c16e3d21e0cdcbc18309b9289ffad90473f1b24dcbae438a2a38) | Over-cap probe refused (`cap_exceeded`, nothing sent); agent stopped from the app (revoke); probe after the revoke refused; XAUt0, CELO and USD₮ sent out. This run is the one recorded for the demo video |
+
+Both are team test wallets and are listed as such in
+[usage.md](usage.md).

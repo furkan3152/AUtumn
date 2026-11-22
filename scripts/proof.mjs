@@ -54,6 +54,8 @@ export const TEAM_WALLETS = {
   "0x15855ae2E04Fd00eFA45cB70D2C29E5777925429": "team owner test",
   "0xA177651FC7F9BfF0804ad123c4fdb8aa6625683C": "team end-to-end test wallet",
   "0x88DeB13766F676C70cC27770d1fEd5c3Eb2414db": "team end-to-end test wallet 2",
+  "0xF4d28071177d6104aE8781034d23dc7A5Fd80b39": "team passkey test wallet (screenshots)",
+  "0x91aC42021e9F8cd5d4e397825f31fD961e7DF947": "team passkey test wallet (demo video)",
 };
 
 /**
