@@ -1697,6 +1697,10 @@ body:has(.landing) .main {
   box-shadow: inset 5px 0 0 0 var(--red-hi);
 }
 
+.error-text a {
+  color: inherit;
+}
+
 /* ---------- Home ---------- */
 
 .home {
@@ -2520,4 +2524,12 @@ body:has(.landing) .main {
 }
 .cta .textlink:disabled {
   color: var(--cream-muted);
+}
+/* The line naming the deployment's other passkey host(s). */
+.cta .cta__note {
+  color: var(--cream-muted);
+  text-align: center;
+}
+.cta .cta__note a {
+  color: var(--gold-light);
 }

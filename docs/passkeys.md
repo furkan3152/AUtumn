@@ -52,15 +52,62 @@ shown after the wallet is created and again from the "Backup code" chip.
   from the passkey alone, so "I already have an Autumn passkey" cannot find
   its wallet; if the browser's data is cleared, the code is the way to name
   the passkey again. For a synced passkey it is a second way back in.
-- **Restoring** ("Restore with backup code") refuses a code for another rpId,
-  and checks that the code's public key is an admin WebAuthn key of the
-  wallet before using it: on Celo once the wallet has code (super-admin, not
-  expired), otherwise in the Altana relay's record of the wallet's keys.
+- **Restoring** ("Restore with backup code") checks the code's rpId first.
+  A code for this page's passkey domain goes on; a code for another host of
+  this deployment shows "This wallet was made at <host>. Open it there."
+  with a link, and nothing else is tried (no passkey prompt, no network
+  request); a code for any other domain is refused as before. Then it checks
+  that the code's public key is an admin WebAuthn key of the wallet before
+  using it: on Celo once the wallet has code (super-admin, not expired),
+  otherwise in the Altana relay's record of the wallet's keys. The code
+  always carries the domain its passkey was made on.
 - **Limit:** it works only together with the passkey. If the device that holds
   a device-bound passkey is reset or the passkey is deleted, the wallet
   cannot sign again and its funds are lost; no code can help. Keep small
   amounts in such a wallet, and use "Send out" to move funds to an address
   you control.
+
+## Which domain a passkey belongs to
+
+A passkey is bound to its relying-party id (rpId), the domain it was made
+on. It works only on pages served from that domain or a subdomain of it, and
+the app also refuses to use passkeys on any other host
+(`passkeyOriginProblem`, `web/src/lib/env.ts`).
+
+One deployment can serve several domains ("two doors, one app"):
+`NEXT_PUBLIC_AUTUMN_RP_IDS` lists them, primary first, for example
+`autumngold.example,autumn-gold.onrender.com`. In the browser the app takes
+the entry equal to the page's hostname as its rpId (`passkeyDomainFor`), and
+every passkey step uses it: creating a wallet, "I already have an Autumn
+passkey", restoring from a backup code, and the backup code itself. Signing
+uses the rpId stored with the wallet, which is the domain the passkey was
+made on. On a host that is not listed the app uses the single configured
+rpId (`NEXT_PUBLIC_AUTUMN_RP_ID`, or the first entry) exactly as a
+single-domain build does, which refuses passkeys on that page; it never
+takes an rpId from an unlisted hostname. Without the list the app behaves as
+before, with `NEXT_PUBLIC_AUTUMN_RP_ID` alone.
+
+Which wallet opens where:
+
+- A wallet made at `autumn-gold.onrender.com` (every wallet made before the
+  custom domain) opens only there. Its passkey, its stored record and its
+  backup code all name that domain.
+- A wallet made at the custom domain opens only there.
+- The browser keeps the wallet record per site, so each domain starts with
+  no wallet. "I already have an Autumn passkey" on a domain where the
+  device holds no passkey for it finds nothing, as before. When more than
+  one domain is configured, the landing page names the other domain(s) with
+  a link ("Wallets made at … open there."), and a backup code from another
+  configured domain links there instead of trying the passkey.
+
+New ERC-8004 registrations name the origin the owner is on as their service
+endpoint; registrations already made keep the endpoint they were made with.
+
+Not implemented: WebAuthn Related Origin Requests (a passkey of one domain
+used on the other). Nothing in the app prevents adding it later: it needs a
+`/.well-known/webauthn` file served from the passkey's own domain (for
+example `web/public/.well-known/webauthn`, served as `application/json`),
+listing the other origins, and browsers that support it.
 
 ## If our deployment is down
 
@@ -69,16 +116,19 @@ out" needs only the passkey, the Altana relay and a Celo RPC. The app keeps
 working (without plans and the agent's log) when the Autumn server cannot be
 reached.
 
-The constraint is the passkey's relying-party id (rpId). A passkey works
-only on pages served from that domain or a subdomain of it, and the app also
-refuses to use passkeys on any other host (`passkeyOriginProblem`,
-`web/src/lib/env.ts`). A copy of Autumn on another domain, or on
-`localhost`, cannot use a passkey created on ours. To use the same passkey
-without our deployment:
+The constraint is the passkey's rpId. A copy of Autumn on another domain, or
+on `localhost`, cannot use a passkey created on ours. Each domain is its own
+door: a wallet made at `autumn-gold.onrender.com` needs that domain, and a
+wallet made at the custom domain needs the custom domain. If our deployment
+is down but a domain still resolves to a server you control (or you point it
+at your own machine as below), the wallets of that domain can be used; the
+other domain's wallets cannot be used through it. To use a passkey without
+our deployment:
 
 1. Build the app from this repository with `NEXT_PUBLIC_AUTUMN_PREVIEW`
-   unset, `NEXT_PUBLIC_AUTUMN_RP_ID` set to our deployment's rpId,
-   `NEXT_PUBLIC_AUTUMN_APP_ORIGIN` unset or set to our deployment's origin,
+   unset, `NEXT_PUBLIC_AUTUMN_RP_ID` set to the domain the wallet was made on
+   (the rpId in its backup code), `NEXT_PUBLIC_AUTUMN_RP_IDS` and
+   `NEXT_PUBLIC_AUTUMN_APP_ORIGIN` unset (or set to our deployment's values),
    the GoldBuyer address and block from the [README](../README.md#deployed-on-celo-mainnet), and no server settings
    (the app then shows the server as unreachable, which is fine for sending
    out).
@@ -91,9 +141,10 @@ without our deployment:
    the admin key from the Altana relay), or "Restore with backup code" for a
    device-bound one. Then use "Send out".
 
-If the domain itself is lost (for example it expires and someone else takes
-it), the passkey cannot be used by a website any more. That is a property of
-passkeys, not something Autumn can work around. Move funds out while you can.
+If a domain itself is lost (for example it expires and someone else takes
+it), the passkeys made on it cannot be used by a website any more. That is a
+property of passkeys, not something Autumn can work around. Move funds out
+while you can. Keep every domain that wallets were made on.
 
 ## `web/public/passkey-test.html`
 

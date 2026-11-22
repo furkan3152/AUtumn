@@ -1,11 +1,11 @@
 {
-  "generatedAt": "2026-11-22T19:48:37.370Z",
+  "generatedAt": "2026-11-22T21:48:03.725Z",
   "chainId": 42220,
   "rpc": "https://forno.celo.org",
   "goldBuyer": "0xB279c4380557b319C42ef3B023Ac8C8b2d64B6A0",
   "fromBlock": "83395551",
-  "toBlock": "83476143",
-  "toBlockTime": "2026-11-22T19:48:21.000Z",
+  "toBlock": "83483310",
+  "toBlockTime": "2026-11-22T21:47:48.000Z",
   "teamWallets": {
     "0x53180bbC54Bc9561c08805ca4832be85345fF535": "team deployer/test",
     "0x15855ae2E04Fd00eFA45cB70D2C29E5777925429": "team owner test",

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import { CUSTODY_TEXT, LIMITS_TEXT, isAndroid, type AutumnClient, type CreationMode, type FeeFacts, type GoldPrice, type Registration, type Wallet } from "@/lib/autumn";
+import { CUSTODY_TEXT, LIMITS_TEXT, WrongDoorError, isAndroid, otherPasskeyDoors, type OtherDoor, type AutumnClient, type CreationMode, type FeeFacts, type GoldPrice, type Registration, type Wallet } from "@/lib/autumn";
 import { formatDateTime, perGram, usdt } from "@/lib/format";
 import { errorText } from "@/lib/useAutumn";
 import { Logo } from "../Logo";
@@ -43,8 +43,13 @@ export function Landing(props: LandingProps) {
   // the account-saved kind instead. Read after mount so the server and the first client render agree.
   const [android, setAndroid] = useState(false);
   useEffect(() => setAndroid(isAndroid()), []);
+  // The deployment's other passkey hosts, known only in the browser: read after mount, like `android`.
+  const [otherDoors, setOtherDoors] = useState<OtherDoor[]>([]);
+  useEffect(() => setOtherDoors(otherPasskeyDoors()), []);
   const [code, setCode] = useState("");
   const [codeError, setCodeError] = useState<string | null>(null);
+  /** Set when the code's wallet opens at another host of this deployment: the error then links there. */
+  const [wrongDoor, setWrongDoor] = useState<OtherDoor | null>(null);
   const codeId = useId();
   const createRef = useRef<HTMLButtonElement>(null);
   const client = props.client;
@@ -69,16 +74,19 @@ export function Landing(props: LandingProps) {
   const restoreCode = async () => {
     if (code.trim() === "") {
       setCodeError("Paste your backup code first.");
+      setWrongDoor(null);
       return;
     }
     if (!client || busy !== null) return;
     setBusy("code");
     setCodeError(null);
+    setWrongDoor(null);
     setError(null);
     try {
       await client.restoreFromBackupCode(code.trim());
     } catch (e) {
       setCodeError(errorText(e));
+      setWrongDoor(e instanceof WrongDoorError ? { host: e.host, url: e.url } : null);
       setBusy(null);
     }
   };
@@ -201,6 +209,18 @@ export function Landing(props: LandingProps) {
               "I already have an Autumn passkey"
             )}
           </Button>
+          {otherDoors.length > 0 && (
+            <p className="small cta__note">
+              Wallets made at{" "}
+              {otherDoors.map((d, i) => (
+                <span key={d.host}>
+                  {i > 0 && (i === otherDoors.length - 1 ? " or " : ", ")}
+                  <a href={d.url}>{d.host}</a>
+                </span>
+              ))}{" "}
+              open there.
+            </p>
+          )}
           {error && (
             <FailureNotice
               error={error.e}
@@ -247,7 +267,13 @@ export function Landing(props: LandingProps) {
               />
               {codeError && (
                 <p className="error-text" role="alert" id={`${codeId}-err`}>
-                  {codeError}
+                  {wrongDoor ? (
+                    <>
+                      This wallet was made at <a href={wrongDoor.url}>{wrongDoor.host}</a>. Open it there.
+                    </>
+                  ) : (
+                    codeError
+                  )}
                 </p>
               )}
               <Button type="submit" variant="plain" block disabled={busy !== null || !ready}>

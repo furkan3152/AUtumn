@@ -24,11 +24,11 @@ import {
   type PlanPeriod,
   type SendAsset,
 } from "@autumn/core";
-import { publicConfig } from "./env";
+import { otherDoors, publicConfig, type OtherDoor } from "./env";
 import type { CreationMode, Discoverable } from "./passkey";
 
 export { PasskeyError, isAndroid, type PasskeyFailureReason, type PasskeyStep, type Discoverable, type CreationMode } from "./passkey";
-export { BackupCodeError, BACKUP_CODE_PREFIX } from "./backupCode";
+export { BackupCodeError, WrongDoorError, BACKUP_CODE_PREFIX } from "./backupCode";
 
 export type { PlanPeriod, SendAsset, SwapAsset, SwapFees };
 export { PLAN_DURATION_WEEKS };
@@ -558,6 +558,17 @@ export function isFunded(state: AutumnState): boolean {
   if (!b || !r) return false;
   return b.usdt > 0n && b.celo >= r.nextGrantFeeCelo;
 }
+
+/**
+ * The other hosts this deployment serves as passkey domains, where wallets made there open. Browser only (call
+ * after mount); empty when one host is configured, in the preview, or on the server.
+ */
+export function otherPasskeyDoors(): OtherDoor[] {
+  if (typeof window === "undefined" || process.env.NEXT_PUBLIC_AUTUMN_PREVIEW === "1") return [];
+  const cfg = publicConfig();
+  return cfg.ok ? otherDoors(cfg.config, window.location) : [];
+}
+export type { OtherDoor };
 
 /** Returns the client for this build, or null when no wallet connection is configured. */
 export async function loadAutumnClient(): Promise<AutumnClient | null> {

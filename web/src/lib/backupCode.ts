@@ -53,6 +53,20 @@ export class BackupCodeError extends Error {
   readonly name = "BackupCodeError";
 }
 
+/**
+ * A backup code whose passkey belongs to another host this deployment serves: its passkey can only be used
+ * there, so no passkey call is made here. `url` is the address where the wallet opens.
+ */
+export class WrongDoorError extends Error {
+  readonly name = "WrongDoorError";
+  constructor(
+    readonly host: string,
+    readonly url: string,
+  ) {
+    super(`This wallet was made at ${host}. Open it there.`);
+  }
+}
+
 /* ---------- base64url ---------- */
 
 export function base64UrlToBytes(s: string): Uint8Array {

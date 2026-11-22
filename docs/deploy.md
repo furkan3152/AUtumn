@@ -25,8 +25,9 @@ Environment variables (names as in `web/.env.example`, which explains each):
 | Variable | Notes |
 |---|---|
 | `NEXT_PUBLIC_AUTUMN_GOLD_BUYER_ADDRESS`, `NEXT_PUBLIC_AUTUMN_GOLD_BUYER_DEPLOY_BLOCK` | GoldBuyer and its deploy block ([README, "Deployed on Celo mainnet"](../README.md#deployed-on-celo-mainnet)) |
-| `NEXT_PUBLIC_AUTUMN_RP_ID` | The passkey rpId: the domain the app is served on. Passkeys made for one rpId do not work on another, so choose it before users create passkeys |
-| `NEXT_PUBLIC_AUTUMN_APP_ORIGIN` | Optional: the exact origin passkeys may be used from |
+| `NEXT_PUBLIC_AUTUMN_RP_ID` | The passkey rpId: the domain the app is served on. Passkeys made for one rpId do not work on another, so choose it before users create passkeys. Optional when `NEXT_PUBLIC_AUTUMN_RP_IDS` is set |
+| `NEXT_PUBLIC_AUTUMN_RP_IDS` | Optional: every domain this deployment serves as a passkey domain, comma-separated, primary first (for example `autumngold.example,autumn-gold.onrender.com`). Each page uses its own host's entry as the rpId; see [Adding a custom domain](#adding-a-custom-domain) |
+| `NEXT_PUBLIC_AUTUMN_APP_ORIGIN` | Optional: the exact origin passkeys may be used from (with `NEXT_PUBLIC_AUTUMN_RP_IDS`: only for the listed host it names; the others use `https://<host>`) |
 | `NEXT_PUBLIC_AUTUMN_CELO_RPC_URL`, `NEXT_PUBLIC_AUTUMN_LOGS_BLOCK_RANGE` | Optional browser RPC and `eth_getLogs` block limit |
 | `DATABASE_URL` | Postgres connection string |
 | `AUTUMN_KEY_ENCRYPTION_KEY` | 32 random bytes in hex; encrypts session keys at rest |
@@ -53,6 +54,52 @@ server answers `{"configured":true,"live":true}`. Without
 ```bash
 curl -H "Authorization: Bearer $CRON_SECRET" https://<app>/api/cron/tick
 ```
+
+### Adding a custom domain
+
+A passkey works only on the domain it was made on, so a custom domain is a
+second door into the same app, not a move. Wallets made at
+`autumn-gold.onrender.com` keep opening only there; wallets made at the
+custom domain open only there ([docs/passkeys.md](passkeys.md#which-domain-a-passkey-belongs-to)).
+
+1. Add the domain to the Render service (Settings, Custom Domains), create
+   the DNS records Render shows, and wait until Render reports the
+   certificate as issued. Keep `autumn-gold.onrender.com` serving the app
+   (do not turn off the service's `onrender.com` subdomain if Render
+   offers it): that would lock out every wallet made there.
+2. Set, for example,
+   `NEXT_PUBLIC_AUTUMN_RP_IDS=autumngold.example,autumn-gold.onrender.com`.
+   Leave `NEXT_PUBLIC_AUTUMN_RP_ID=autumn-gold.onrender.com` and
+   `NEXT_PUBLIC_AUTUMN_APP_ORIGIN=https://autumn-gold.onrender.com` as they
+   are; with the list they apply only to that host (and to hosts not in the
+   list, which cannot use passkeys).
+3. Rebuild and deploy (the value is inlined at build time). Nothing else
+   changes: the server, the database, plans and the agent do not depend on
+   the request's host, and `AUTUMN_KEEP_AWAKE_URL` can name either host
+   because both reach the same service.
+
+Both domains must keep resolving to this deployment for as long as any
+wallet made on them is in use. Never remove a domain from the list, and
+never let one lapse, once wallets have been made on it. Do not redirect one
+domain to the other: a redirect hides the wallets made on the redirected
+domain.
+
+After the domain is live, check:
+
+- On `https://autumn-gold.onrender.com`, a wallet made before the change
+  still loads, its backup code is identical to the one saved before, and a
+  passkey step (for example "Stop", "Send out" of a small amount, or a new
+  plan) prompts for the existing passkey and succeeds.
+- On the custom domain, a new wallet's passkey is made for the custom
+  domain (its backup code names it; Chrome's
+  `chrome://settings/passkeys` or the phone's password manager lists it
+  under the custom domain), and "I already have an Autumn passkey" finds it
+  after the site's data is cleared.
+- On each domain, the landing page names the other domain with a working
+  link, and the other domain's backup code shows "This wallet was made at
+  … Open it there." without a passkey prompt.
+- `curl -sI https://<custom domain>/` returns the same security headers as
+  the onrender host, and `/api/health` answers the same on both.
 
 ## Alternative: Cloudflare Workers (not what the live deployment runs)
 
@@ -101,8 +148,10 @@ adapter (`@opennextjs/cloudflare`). The config is in `web/wrangler.jsonc`,
    On `workers.dev` the passkey rpId is the full hostname,
    `autumn.<your-subdomain>.workers.dev`, not `workers.dev` (a public
    suffix, which browsers refuse). Passkeys made there work only there, so
-   choose the final domain before users create passkeys. With a custom
-   domain, use that domain for both values and rebuild.
+   choose the final domain before users create passkeys. To add a custom
+   domain while keeping the `workers.dev` wallets, list both in
+   `NEXT_PUBLIC_AUTUMN_RP_IDS` and rebuild (see
+   [Adding a custom domain](#adding-a-custom-domain)).
 5. Preview the built Worker locally in the Workers runtime with
    `npm run cf:preview` (settings from `web/.dev.vars`, same names as the
    secrets).

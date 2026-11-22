@@ -102,7 +102,7 @@ const API_TEXT: Record<string, string> = {
 export function errorText(e: unknown): string {
   if (!(e instanceof Error) || !e.message) return "Something went wrong.";
   // Autumn's own errors are already plain sentences.
-  if (e.name === "CheckAgainError" || e.name === "PasskeyError" || e.name === "BackupCodeError") return e.message;
+  if (e.name === "CheckAgainError" || e.name === "PasskeyError" || e.name === "BackupCodeError" || e.name === "WrongDoorError") return e.message;
   if (e instanceof ApiError) {
     if (e.code && API_TEXT[e.code]) return API_TEXT[e.code]!;
     if (e.status === 429) return "Too many requests from this network right now. Wait a few minutes and try again.";

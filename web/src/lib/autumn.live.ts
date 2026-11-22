@@ -99,8 +99,8 @@ import {
   SwapUnavailableError,
   SWAP_ASSET_LABEL,
 } from "./autumn";
-import { passkeyOriginProblem, type PublicConfig } from "./env";
-import { BackupCodeError, decodeBackupCode, encodeBackupCode, webAuthnKeyHash } from "./backupCode";
+import { backupCodeDoor, passkeyDomainFor, passkeyOriginProblem, type PublicConfig } from "./env";
+import { BackupCodeError, WrongDoorError, decodeBackupCode, encodeBackupCode, webAuthnKeyHash } from "./backupCode";
 import {
   browserCreateFn,
   browserGetFn,
@@ -229,6 +229,9 @@ const SWAP_UNREADABLE = "A reference price or the pool's quote could not be read
 const errText = (e: unknown) => (e instanceof Error && e.message ? e.message : String(e));
 
 export function createLiveClient(cfg: PublicConfig): AutumnClient {
+  // The passkey domain of this page: the configured host it is served on (NEXT_PUBLIC_AUTUMN_RP_IDS), or the single
+  // configured rpId. Read here, in the browser: the client is created after mount (useAutumn), never on the server.
+  const passkeyDomain = passkeyDomainFor(cfg, window.location);
   const network = { ...CELO, publicRpcUrl: cfg.rpcUrl };
   let sdk: Client | null = null;
   const sdkClient = (): Client =>
@@ -290,7 +293,7 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
   const platformCapabilities = () => (capabilities ??= readPlatformCapabilities());
   if (hasWebAuthn()) void platformCapabilities();
   function assertPasskeyOrigin() {
-    const problem = passkeyOriginProblem(cfg, window.location);
+    const problem = passkeyOriginProblem(passkeyDomain, window.location);
     if (problem) throw new Error(problem);
   }
   async function remember(address: Address, credential: PasskeyCredential, discoverable: Discoverable): Promise<Wallet> {
@@ -381,7 +384,7 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
         `Your passkey belongs to wallet ${wallet}, which has not made a transaction yet, and its key cannot be found without data this browser no longer has. Restore with your backup code instead.`,
       );
     }
-    return { address: getAddress(wallet), credential: { kind: "webauthn", id: credentialId, publicKey: admins[0]!.publicKey as Hex, rpId: cfg.rpId } };
+    return { address: getAddress(wallet), credential: { kind: "webauthn", id: credentialId, publicKey: admins[0]!.publicKey as Hex, rpId: passkeyDomain.rpId } };
   }
 
   async function loadTxFacts(hash: string | null | undefined, wallet: Address): Promise<void> {
@@ -1568,7 +1571,7 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
       try {
         w = await sdkClient().createPasskeyWallet({
           name: "Autumn",
-          rpId: cfg.rpId,
+          rpId: passkeyDomain.rpId,
           webAuthn: { createFn: createFn as NonNullable<PasskeyWebAuthnFns["createFn"]> },
         });
       } catch (e) {
@@ -1594,7 +1597,7 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
       }) as NonNullable<PasskeyWebAuthnFns["getFn"]>;
       let w: Awaited<ReturnType<Client["recoverFromPasskey"]>>;
       try {
-        w = await sdkClient().recoverFromPasskey({ rpId: cfg.rpId, chainId: CELO_CHAIN_ID, webAuthn: { getFn } });
+        w = await sdkClient().recoverFromPasskey({ rpId: passkeyDomain.rpId, chainId: CELO_CHAIN_ID, webAuthn: { getFn } });
       } catch (e) {
         const pk = passkeyFailure(e, "find");
         if (pk) throw pk;
@@ -1620,13 +1623,16 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
       if (!w) throw new Error("There is no wallet on this device yet.");
       const cred = w.credential as WebAuthnCredential;
       if (cred.kind !== "webauthn") throw new Error("This wallet's key is not a device passkey.");
-      return encodeBackupCode({ wallet: w.address, credentialId: cred.id, publicKey: cred.publicKey, rpId: cred.rpId ?? cfg.rpId, discoverable: discoverableOf(w) });
+      return encodeBackupCode({ wallet: w.address, credentialId: cred.id, publicKey: cred.publicKey, rpId: cred.rpId ?? passkeyDomain.rpId, discoverable: discoverableOf(w) });
     },
     async restoreFromBackupCode(code: string) {
       assertPasskeyOrigin();
       const d = decodeBackupCode(code);
-      if (d.rpId !== cfg.rpId) {
-        throw new BackupCodeError(`This backup code is for a passkey on ${d.rpId}. This app uses passkeys on ${cfg.rpId}.`);
+      const door = backupCodeDoor(d.rpId, cfg, window.location);
+      // Another host of this deployment: its passkey works only there, so nothing is tried here.
+      if (door.kind === "elsewhere") throw new WrongDoorError(door.host, door.url);
+      if (door.kind === "foreign") {
+        throw new BackupCodeError(`This backup code is for a passkey on ${d.rpId}. This app uses passkeys on ${passkeyDomain.rpId}.`);
       }
       await reconcile();
       const current = storedWallet();

@@ -167,7 +167,8 @@ npm run dev                  # http://localhost:3000
 Put the GoldBuyer address and block from
 [Deployed on Celo mainnet](#deployed-on-celo-mainnet) in both the `AUTUMN_…`
 and `NEXT_PUBLIC_AUTUMN_…` lines, and use `NEXT_PUBLIC_AUTUMN_RP_ID=localhost`
-locally. Leave
+locally (a deployment that serves more than one domain lists them in
+`NEXT_PUBLIC_AUTUMN_RP_IDS`; see [docs/passkeys.md](docs/passkeys.md#which-domain-a-passkey-belongs-to)). Leave
 `AUTUMN_EXECUTION=dry-run` to see decisions without spending; `live` sends
 purchases. `AUTUMN_SUBMITTER` chooses who sends them: `relay` (the default)
 or `direct-prepared` (the live deployment), which needs
