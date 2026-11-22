@@ -86,6 +86,24 @@ export function expectedSessionOf(plan: PlanRecord, goldBuyer: Address, nowSecs:
 }
 
 /**
+ * A definite answer about a plan's key, from a successful chain read (or the
+ * plan's own state): "mismatch" means the chain shows other limits than the
+ * plan's; "not_visible" that the key is not active on the account yet;
+ * "expired" that it has expired; "report" that the browser's report differs
+ * from the plan; "state" that the plan is no longer waiting. A failed read is
+ * never a GrantCheckError: it is thrown as it came.
+ */
+export class GrantCheckError extends Error {
+  constructor(
+    readonly kind: "mismatch" | "not_visible" | "expired" | "report" | "state",
+    message: string,
+  ) {
+    super(message);
+    this.name = "GrantCheckError";
+  }
+}
+
+/**
  * After the browser's grant confirmed: checks the reported session against the
  * plan, then against the chain (key active on the wallet's account and in the
  * KeyStore, allowlist, cap, period and expiry exactly as planned), and only
@@ -100,14 +118,21 @@ export async function confirmGrant(
   grantTxHash?: Hex,
 ): Promise<PlanRecord> {
   const plan = await deps.storage.getPlan(planId);
-  if (!plan) throw new Error("no such plan");
-  if (plan.status !== "pending_grant") throw new Error("plan is not waiting for a grant");
+  if (!plan) throw new GrantCheckError("state", "no such plan");
+  if (plan.status !== "pending_grant") throw new GrantCheckError("state", "plan is not waiting for a grant");
   const state = await deps.chain.sessionState(plan.walletAddress, plan.sessionPublicKey);
-  const grant = grantOf(plan, deps.goldBuyer, state.blockTimestamp);
+  if (state.status === "expired") throw new GrantCheckError("expired", "the session has expired onchain");
+  if (state.status !== "active") throw new GrantCheckError("not_visible", `the session is not active onchain yet (${state.status}); try again in a few seconds`);
+  let grant: SessionGrant;
+  try {
+    grant = grantOf(plan, deps.goldBuyer, state.blockTimestamp);
+  } catch (e) {
+    throw new GrantCheckError("state", (e as Error).message);
+  }
   const expected = expectedSerializedSession(grant, plan.walletAddress, plan.sessionPublicKey);
-  if (!sessionMatchesGrant(reported, expected)) throw new Error("the granted session does not match the plan");
+  if (!sessionMatchesGrant(reported, expected)) throw new GrantCheckError("report", "the granted session does not match the plan");
   const mismatch = sessionLimitsMismatch(state, grant, deps.goldBuyer);
-  if (mismatch) throw new Error(mismatch);
+  if (mismatch) throw new GrantCheckError("mismatch", mismatch);
   await deps.storage.activatePlan(planId, expected, grantTxHash);
   return (await deps.storage.getPlan(planId))!;
 }

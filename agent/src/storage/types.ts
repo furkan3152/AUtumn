@@ -22,6 +22,8 @@ export interface Storage {
   countPendingPlans(walletAddress: Address, since: number): Promise<number>;
   /** Deletes the wallet's pending_grant plans created before `before` (unix seconds), with their session keys. Returns how many. */
   deletePendingPlansBefore(walletAddress: Address, before: number): Promise<number>;
+  /** Deletes one plan if it is still pending_grant and has no attempts or run log, with its session key. True when deleted. */
+  deletePendingPlan(planId: string): Promise<boolean>;
   /** Every plan of a wallet, in any state. */
   countPlans(walletAddress: Address): Promise<number>;
   /** pending_grant → active, storing the granted session and its grant transaction. */

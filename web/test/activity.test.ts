@@ -4,7 +4,9 @@ import {
   agentStatusFor,
   buildActivity,
   currentPlan,
+  mergePurchases,
   nextPurchaseFor,
+  runLogPurchases,
   planItems,
   purchaseItems,
   runLogItems,
@@ -120,15 +122,43 @@ describe("agentStatusFor", () => {
 });
 
 describe("nextPurchaseFor", () => {
-  it("is this period's due time until the buy lands, then the next period's", () => {
+  it("makes a new plan's first purchase due at once, then follows the period's due time", () => {
     const p = plan({ period: "day", hourUtc: 9 });
     const now = t("2026-11-20T08:00:00Z");
-    expect(nextPurchaseFor(p, [], now, { kind: "active" })?.toISOString()).toBe("2026-11-20T09:00:00.000Z");
+    // No purchase yet: due since the plan's creation (the runner buys at its next tick), whatever the period.
+    expect(nextPurchaseFor(p, [], now, { kind: "active" })?.toISOString()).toBe("2026-11-18T09:00:00.000Z");
+    // Bought yesterday: today's 09:00.
+    expect(nextPurchaseFor(p, [buy(t("2026-11-19T09:00:10Z"), 1)], now, { kind: "active" })?.toISOString()).toBe("2026-11-20T09:00:00.000Z");
     expect(nextPurchaseFor(p, [buy(t("2026-11-20T09:00:10Z"), 1)], t("2026-11-20T10:00:00Z"), { kind: "active" })?.toISOString()).toBe("2026-11-21T09:00:00.000Z");
     expect(nextPurchaseFor(p, [], now, { kind: "stopped", stoppedAt: null })).toBeNull();
     // Bought today, and the plan ends before tomorrow's buy: nothing more is scheduled.
     const ending = plan({ period: "day", hourUtc: 9, expiresAt: t("2026-11-20T23:00:00Z") });
     expect(nextPurchaseFor(ending, [buy(t("2026-11-20T09:00:10Z"), 1)], t("2026-11-20T10:00:00Z"), { kind: "active" })).toBeNull();
+  });
+
+  it("ignores purchases from before the plan, and keeps 12 h after a late catch-up purchase", () => {
+    const p = plan({ period: "day", hourUtc: 1, createdAt: t("2026-11-18T01:00:00Z") });
+    expect(nextPurchaseFor(p, [buy(t("2026-11-17T12:00:00Z"), 1)], t("2026-11-18T02:00:00Z"), { kind: "active" })?.toISOString()).toBe("2026-11-18T01:00:00.000Z");
+    const late = [buy(t("2026-11-18T01:01:00Z"), 1), buy(t("2026-11-19T23:50:00Z"), 2)];
+    expect(nextPurchaseFor(p, late, t("2026-11-20T00:30:00Z"), { kind: "active" })?.toISOString()).toBe("2026-11-20T11:50:00.000Z");
+  });
+});
+
+describe("runLogPurchases and mergePurchases", () => {
+  it("turns the run log's purchases into history, and lets the chain's copy win", () => {
+    const log: RunLogView[] = [
+      { planId: "p1", periodId: "2026-11-18", at: t("2026-11-18T09:01:00Z"), outcome: "bought", reason: "weekly purchase", txHash: H(101), amountIn: "5000000", out: "1400", kind: "weekly" },
+      { planId: "p1", periodId: "2026-11-18", at: t("2026-11-18T10:00:00Z"), outcome: "skipped", reason: "x", kind: "twap_unavailable" },
+      { planId: "p1", periodId: "2026-11-25", at: t("2026-11-25T09:01:00Z"), outcome: "bought", reason: "weekly purchase", txHash: H(102), amountIn: "5000000", out: "1400", kind: "weekly" },
+    ];
+    const fromLog = runLogPurchases(log, WALLET);
+    expect(fromLog.map((p) => [p.txHash, p.amountIn, p.out])).toEqual([
+      [H(101), 5_000_000n, 1_400n],
+      [H(102), 5_000_000n, 1_400n],
+    ]);
+    const merged = mergePurchases([buy(t("2026-11-18T09:01:05Z"), 1)], fromLog);
+    expect(merged.map((p) => p.txHash)).toEqual([H(101), H(102)]);
+    expect(merged[0]!.blockNumber).toBe(1001n); // the chain's copy
   });
 });
 

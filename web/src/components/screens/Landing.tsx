@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { CUSTODY_TEXT, LIMITS_TEXT, isAndroid, type AutumnClient, type CreationMode, type FeeFacts, type GoldPrice, type Registration, type Wallet } from "@/lib/autumn";
 import { formatDateTime, perGram, usdt } from "@/lib/format";
 import { errorText } from "@/lib/useAutumn";
@@ -25,7 +25,8 @@ const STEPS: { title: string; icon: IconName; body: React.ReactNode }[] = [
 ];
 
 type LandingProps = {
-  client: AutumnClient;
+  /** null while the client loads: the page shows at once, its buttons wait. */
+  client: AutumnClient | null;
   price: GoldPrice | null;
   registration: Registration | null;
   fees: FeeFacts | null;
@@ -45,15 +46,20 @@ export function Landing(props: LandingProps) {
   const [code, setCode] = useState("");
   const [codeError, setCodeError] = useState<string | null>(null);
   const codeId = useId();
+  const createRef = useRef<HTMLButtonElement>(null);
+  const client = props.client;
+  const ready = client !== null;
 
   const run = async (kind: "create" | "restore", mode: CreationMode = "auto") => {
+    if (!client || busy !== null) return;
     setBusy(kind);
     setError(null);
+    setCodeError(null);
     try {
       if (kind === "create") {
-        const w = await props.client.createWallet({ mode });
+        const w = await client.createWallet({ mode });
         props.onCreated?.(w);
-      } else await props.client.restoreWallet();
+      } else await client.restoreWallet();
     } catch (e) {
       setError({ kind, mode, e });
       setBusy(null);
@@ -65,10 +71,12 @@ export function Landing(props: LandingProps) {
       setCodeError("Paste your backup code first.");
       return;
     }
+    if (!client || busy !== null) return;
     setBusy("code");
     setCodeError(null);
+    setError(null);
     try {
-      await props.client.restoreFromBackupCode(code.trim());
+      await client.restoreFromBackupCode(code.trim());
     } catch (e) {
       setCodeError(errorText(e));
       setBusy(null);
@@ -106,15 +114,18 @@ export function Landing(props: LandingProps) {
           A helper buys Tether Gold for you with USD₮ on Celo, on a schedule. Unlike an exchange&apos;s recurring buy, the gold
           sits in a wallet only you control, and the agent&apos;s limits are public and enforced onchain.
         </p>
-        {props.price && (
-          <p className="landing__price">
-            <Icon name="coin" />
+        {/* Always rendered, so the price arriving later does not move the page. */}
+        <p className="landing__price" aria-live="polite">
+          <Icon name="coin" />
+          {props.price ? (
             <span>
               Gold now: <span className="num">{usdt(perGram(props.price.usdtPerOunce))}</span> USD₮ per gram on Celo, checked{" "}
               <span className="num">{formatDateTime(props.price.observedAt)}</span>.
             </span>
-          </p>
-        )}
+          ) : (
+            <span className="muted">Reading the gold price on Celo…</span>
+          )}
+        </p>
         {props.notices?.map((n) => (
           <p key={n} className="muted small">
             {n}
@@ -122,7 +133,10 @@ export function Landing(props: LandingProps) {
         ))}
         <Button
           block
-          onClick={() => document.getElementById("start")?.scrollIntoView({ behavior: "smooth", block: "center" })}
+          onClick={() => {
+            document.getElementById("start")?.scrollIntoView({ behavior: "smooth", block: "center" });
+            createRef.current?.focus({ preventScroll: true });
+          }}
         >
           Get started
         </Button>
@@ -157,7 +171,7 @@ export function Landing(props: LandingProps) {
         </Panel>
 
         <div className="cta" id="start">
-          <Button block onClick={() => run("create")} disabled={busy !== null}>
+          <Button block onClick={() => run("create")} disabled={busy !== null || !ready} ref={createRef}>
             {busy === "create" ? (
               <>
                 <Spinner /> Waiting for your passkey…
@@ -169,16 +183,16 @@ export function Landing(props: LandingProps) {
           {android ? (
             <>
               <p className="muted small">On Android the passkey is made with this phone&apos;s screen lock and lives on this phone only.</p>
-              <button type="button" className="textlink" onClick={() => run("create", "synced")} disabled={busy !== null}>
+              <button type="button" className="textlink" onClick={() => run("create", "synced")} disabled={busy !== null || !ready}>
                 Save the passkey to my Google account instead
               </button>
             </>
           ) : (
-            <button type="button" className="textlink" onClick={() => run("create", "device")} disabled={busy !== null}>
+            <button type="button" className="textlink" onClick={() => run("create", "device")} disabled={busy !== null || !ready}>
               My device only offers another device
             </button>
           )}
-          <Button variant="plain" block onClick={() => run("restore")} disabled={busy !== null}>
+          <Button variant="plain" block onClick={() => run("restore")} disabled={busy !== null || !ready}>
             {busy === "restore" ? (
               <>
                 <Spinner /> Waiting for your passkey…
@@ -195,7 +209,16 @@ export function Landing(props: LandingProps) {
             />
           )}
           {!codeOpen ? (
-            <Button variant="plain" block className="btn--quiet" onClick={() => setCodeOpen(true)} disabled={busy !== null}>
+            <Button
+              variant="plain"
+              block
+              className="btn--quiet"
+              onClick={() => {
+                setError(null);
+                setCodeOpen(true);
+              }}
+              disabled={busy !== null || !ready}
+            >
               Restore with backup code
             </Button>
           ) : (
@@ -227,7 +250,7 @@ export function Landing(props: LandingProps) {
                   {codeError}
                 </p>
               )}
-              <Button type="submit" variant="plain" block disabled={busy !== null}>
+              <Button type="submit" variant="plain" block disabled={busy !== null || !ready}>
                 {busy === "code" ? (
                   <>
                     <Spinner /> Checking the code…

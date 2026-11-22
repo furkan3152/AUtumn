@@ -2,13 +2,14 @@ import { getAddress, type Address, type Hex } from "viem";
 import {
   buildBuyCalls,
   decodeBuyCalls,
-  dueTimeInPeriod,
+  MIN_PURCHASE_SPACING_SECS,
   explainAltanaError,
   explainExecuteResult,
   periodId as periodIdOf,
   periodStart,
   periodSecs,
   planToSessionGrant,
+  nextScheduledPurchase,
   relayFeeVerdict,
   sessionLimitsMismatch,
   weekId as weekIdOf,
@@ -225,7 +226,7 @@ export function createRunner(opts: RunnerOptions) {
 
   async function processPlan(
     plan: PlanRecord,
-    ctx: { now: number; scanned: Purchase[]; open: Attempt[]; deadline: number },
+    ctx: { now: number; scanned: Purchase[]; scannedSince: number; open: Attempt[]; deadline: number },
   ): Promise<PlanReport> {
     const { now, deadline } = ctx;
     const period = periodIdOf(now, plan.period);
@@ -243,14 +244,18 @@ export function createRunner(opts: RunnerOptions) {
       return { ...base, decision: "waiting_on_earlier_attempt", reason: "an earlier purchase's outcome is not yet visible onchain" };
     }
 
-    // 2. What did the chain record in this period? (The tick's scan starts at or before this period's start.)
+    // 2. What did the chain record for this plan in this period? (The tick's scan starts at or before this period's
+    // start minus the purchase spacing.) Only this plan's purchases count: a new plan has a key and a cap of its own.
     const start = periodStart(now, plan.period);
-    const mine = ctx.scanned.filter(
-      (p) => p.buyer === plan.walletAddress && p.timestamp >= start && p.timestamp < start + periodSecs(plan.period),
-    );
+    const own = ctx.scanned.filter((p) => p.buyer === plan.walletAddress && p.timestamp >= plan.createdAt);
+    const mine = own.filter((p) => p.timestamp >= start && p.timestamp < start + periodSecs(plan.period));
     let slot: AttemptSlot;
     if (mine.length === 0) {
-      if (now < dueTimeInPeriod(now, plan.period, plan.dayOfWeek, plan.hourUtc)) return { ...base, decision: "not_due" };
+      let lastPurchaseAt: number | null = own.length ? Math.max(...own.map((p) => p.timestamp)) : null;
+      // Older than the scan: bought before (an attempt was credited) means no spacing applies; never bought means first purchase.
+      if (lastPurchaseAt === null && plan.createdAt < ctx.scannedSince && (await storage.creditedTxHashes(plan.id)).size > 0) lastPurchaseAt = 0;
+      const due = nextScheduledPurchase(plan, now, { lastPurchaseAt, boughtThisPeriod: false });
+      if (now < due) return { ...base, decision: "not_due" };
       slot = "weekly";
     } else if (plan.dipBuy && mine.length === 1) {
       slot = "dip";
@@ -429,7 +434,7 @@ export function createRunner(opts: RunnerOptions) {
       try {
         const o = await storage.openAttempts(plan.id);
         open.set(plan.id, o);
-        since = Math.min(since, periodStart(now, plan.period), ...o.map((a) => a.startedAt - 60));
+        since = Math.min(since, periodStart(now, plan.period) - MIN_PURCHASE_SPACING_SECS[plan.period], ...o.map((a) => a.startedAt - 60));
       } catch (err) {
         reports.set(plan.id, { planId: plan.id, decision: "error", reason: (err as Error).message });
       }
@@ -466,7 +471,7 @@ export function createRunner(opts: RunnerOptions) {
             continue;
           }
           try {
-            reports.set(plan.id, await processPlan(plan, { now, scanned, open: open.get(plan.id) ?? [], deadline }));
+            reports.set(plan.id, await processPlan(plan, { now, scanned, scannedSince: since, open: open.get(plan.id) ?? [], deadline }));
           } catch (err) {
             log("plan error", { planId: plan.id, error: (err as Error).message });
             reports.set(plan.id, { planId: plan.id, decision: "error", reason: (err as Error).message });

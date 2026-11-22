@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useId, useMemo, useState } from "react";
-import { SEND_ASSET_INFO, checkDestination, parseAmount } from "@autumn/core";
-import { type Address, type AutumnClient, type AutumnState, type SendAsset, type SendQuote, type SendResult } from "@/lib/autumn";
+import { SEND_ASSET_INFO, checkDestination, parseAmountText } from "@autumn/core";
+import { CheckAgainError, sendMax, type Address, type AutumnClient, type AutumnState, type SendAsset, type SendQuote, type SendResult } from "@/lib/autumn";
 import { celo, formatDateTime, formatGrams, formatUnits, shortAddress, usdt, usdtFine } from "@/lib/format";
 import { errorText } from "@/lib/useAutumn";
 import { Button, FailureNotice, Label, Panel, ScreenHead, Spinner, TxLink } from "../ui";
@@ -37,6 +37,7 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [touched, setTouched] = useState({ to: false, amount: false });
   const assetName = useId();
   const toId = useId();
@@ -44,18 +45,17 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
 
   const balance = balanceOf(state.balances, asset);
   const dest = useMemo(() => checkDestination(to, { wallet, ...(goldBuyer ? { contracts: [goldBuyer] } : {}) }), [to, wallet, goldBuyer]);
-  const amount = parseAmount(amountText, SEND_ASSET_INFO[asset].decimals);
-  const max = quote?.max ?? null;
-  const amountProblem =
-    amountText.trim() === ""
-      ? "Enter an amount."
-      : amount === null
-        ? `Enter a positive amount with at most ${SEND_ASSET_INFO[asset].decimals} decimals.`
-        : amount > balance
-          ? "That is more than the wallet holds."
-          : max !== null && amount > max
-            ? `That leaves too little for the fee. The most you can send is ${shown(max, asset)}.`
-            : null;
+  const parsed = parseAmountText(amountText, SEND_ASSET_INFO[asset].decimals);
+  const amount = parsed.ok ? parsed.value : null;
+  // From the balance shown now and the latest fee quote, on every render: never a stale figure.
+  const max = quote ? sendMax(asset, balance, quote) : null;
+  const amountProblem = !parsed.ok
+    ? parsed.problem
+    : parsed.value > balance
+      ? "That is more than the wallet holds."
+      : max !== null && parsed.value > max
+        ? `That leaves too little for the fee. The most you can send is ${shown(max, asset)}.`
+        : null;
 
   // The fee and the maximum, quoted for the chosen asset (nothing is signed).
   useEffect(() => {
@@ -71,14 +71,34 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
     };
   }, [client, asset]);
 
+  /** Max: a fresh fee quote, then the most the current balance allows with it. */
+  const fillMax = async () => {
+    setTouched((t) => ({ ...t, amount: true }));
+    if (busy) return;
+    setBusy(true);
+    try {
+      const q = await client.quoteSend({ asset });
+      setQuote(q);
+      setQuoteError(null);
+      setAmountText(exact(sendMax(asset, balance, q), asset));
+    } catch (e) {
+      setQuoteError(errorText(e));
+      if (max !== null) setAmountText(exact(max, asset));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const review = async () => {
     setTouched({ to: true, amount: true });
-    if (!dest.ok || amountProblem || amount === null) return;
+    if (!dest.ok || amountProblem || amount === null || busy) return;
     setBusy(true);
     setError(null);
     try {
       const q = await client.quoteSend({ asset, to: dest.address, amount });
-      if (amount > q.max) throw new Error(`That leaves too little for the fee. The most you can send is ${shown(q.max, asset)}.`);
+      setQuote(q); // Max and the fee line follow the newest quote
+      const most = sendMax(asset, balance, q);
+      if (amount > most) throw new Error(`That leaves too little for the fee. The most you can send is ${shown(most, asset)}.`);
       setStep({ kind: "review", to: dest.address, amount, quote: q });
     } catch (e) {
       setError(e);
@@ -88,7 +108,7 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
   };
 
   const confirm = async () => {
-    if (step.kind !== "review") return;
+    if (step.kind !== "review" || error instanceof CheckAgainError) return;
     const { to: dst, amount: amt } = step;
     setStep({ kind: "sending", to: dst, amount: amt });
     setError(null);
@@ -100,6 +120,23 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
       setStep({ kind: "review", to: dst, amount: amt, quote: step.quote });
     }
   };
+
+  /** The transfer may be on its way: read its status, never send again. */
+  const checkAgain = async () => {
+    if (step.kind !== "review" || !(error instanceof CheckAgainError) || checking) return;
+    const { to: dst, amount: amt } = step;
+    setChecking(true);
+    try {
+      const result = await client.checkSend({ asset, to: dst, amount: amt }, error.ref);
+      setError(null);
+      setStep({ kind: "done", to: dst, amount: amt, result });
+    } catch (e) {
+      setError(e);
+    } finally {
+      setChecking(false);
+    }
+  };
+  const inFlight = error instanceof CheckAgainError;
 
   return (
     <div className="screen send">
@@ -132,7 +169,7 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
                     />
                     <Icon name={a.icon} className="preset__icon" />
                     <span className="preset__amount preset__amount--small">{a.label}</span>
-                    <span className="preset__unit num">{a.id === "XAUT0" ? `${formatGrams(balanceOf(state.balances, a.id))} g` : a.id === "USDT" ? usdt(balanceOf(state.balances, a.id)) : celo(balanceOf(state.balances, a.id))}</span>
+                    <span className="preset__unit num">{a.id === "XAUT0" ? `${exact(balanceOf(state.balances, a.id), a.id)} XAUt0` : a.id === "USDT" ? usdt(balanceOf(state.balances, a.id)) : celo(balanceOf(state.balances, a.id))}</span>
                   </label>
                 ))}
               </div>
@@ -172,7 +209,7 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
           <Panel title="Amount" icon="coin" className="send__amount">
             <div className="field">
               <label htmlFor={amountId}>
-                {SEND_ASSET_INFO[asset].symbol} to send (you have <span className="num">{shown(balance, asset)}</span>)
+                {asset === "XAUT0" ? "XAUt0 (troy ounces)" : SEND_ASSET_INFO[asset].symbol} to send (you have <span className="num">{shown(balance, asset)}</span>)
               </label>
               <div className="field__row">
                 <input
@@ -189,23 +226,23 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
                 <Button
                   variant="plain"
                   className="btn--small"
-                  disabled={max === null || max === 0n}
-                  onClick={() => {
-                    if (max !== null) setAmountText(exact(max, asset));
-                    setTouched((t) => ({ ...t, amount: true }));
-                  }}
+                  disabled={busy || max === null || max === 0n}
+                  onClick={() => void fillMax()}
                   aria-label={`Send the most possible, leaving room for the fee`}
                 >
                   Max
                 </Button>
               </div>
+              {asset === "XAUT0" && amount !== null && !amountProblem && (
+                <p className="muted small num">= {formatGrams(amount)} g of gold</p>
+              )}
               {touched.amount && amountProblem && (
                 <p className="error-text" role="alert">
                   {amountProblem}
                 </p>
               )}
             </div>
-            <FeeLine quote={quote} error={quoteError} asset={asset} />
+            <FeeLine quote={quote} max={max} error={quoteError} asset={asset} />
           </Panel>
 
           <div className="send__act">
@@ -266,6 +303,17 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
             <p className="waiting" role="status">
               <Spinner /> Approve with your passkey, then Autumn waits for Celo to confirm…
             </p>
+          ) : inFlight ? (
+            <div className="row">
+              {checking && (
+                <p className="waiting" role="status">
+                  <Spinner /> Checking Celo…
+                </p>
+              )}
+              <Button variant="plain" onClick={onBack} disabled={checking}>
+                Back to the wallet
+              </Button>
+            </div>
           ) : (
             <div className="row">
               <Button onClick={confirm}>Send with passkey</Button>
@@ -274,11 +322,7 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
               </Button>
             </div>
           )}
-          <FailureNotice
-            error={error}
-            onRetry={(error as { name?: string } | null)?.name === "SendSubmittedError" ? undefined : confirm}
-            prefix={(error as { name?: string } | null)?.name === "SendSubmittedError" ? "" : "Not sent: "}
-          />
+          <FailureNotice error={error} onRetry={confirm} onCheckAgain={checking ? undefined : checkAgain} prefix="Not sent: " />
         </Panel>
       )}
 
@@ -319,7 +363,7 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
   );
 }
 
-function FeeLine({ quote, error, asset }: { quote: SendQuote | null; error: string | null; asset: SendAsset }) {
+function FeeLine({ quote, max, error, asset }: { quote: SendQuote | null; max: bigint | null; error: string | null; asset: SendAsset }) {
   if (error) return <p className="muted small">The fee could not be quoted right now: {error}</p>;
   if (!quote)
     return (
@@ -335,7 +379,7 @@ function FeeLine({ quote, error, asset }: { quote: SendQuote | null; error: stri
           , plus <span className="num">{celo(quote.registrationCelo)}</span> CELO for Altana&apos;s one-time wallet registration
         </>
       )}
-      . Max leaves room for it: <span className="num">{shown(quote.max, asset)}</span>.
+      . Max leaves room for it: <span className="num">{shown(max ?? quote.max, asset)}</span>.
     </p>
   );
 }

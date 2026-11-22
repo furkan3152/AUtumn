@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 import pg from "pg";
 import { getAddress, toHex, type Address } from "viem";
 import { AltanaError } from "@altananetwork/sdk";
-import { USDT, periodStart } from "@autumn/core";
+import { MIN_PURCHASE_SPACING_SECS, USDT, periodStart } from "@autumn/core";
 import { createPlan } from "../src/plans.js";
 import { createRunner, FEE_TOO_HIGH_REASON } from "../src/runner.js";
 import { MemoryStorage } from "../src/storage/memory.js";
@@ -118,16 +118,16 @@ describe("runner capacity", () => {
     expect(w.executor.maxInFlightPerWallet).toBe(1);
     expect(w.executor.maxInFlight).toBeGreaterThan(1);
     expect(w.executor.maxInFlight).toBeLessThanOrEqual(4);
-    // One shared scan per tick, from the start of the current week (not a whole week back from now, not per plan).
-    expect(w.chain.scans[0]).toBe(periodStart(WED_NOON, "week"));
+    // One shared scan per tick, from the start of the current week less the purchase spacing (not per plan).
+    expect(w.chain.scans[0]).toBe(periodStart(WED_NOON, "week") - MIN_PURCHASE_SPACING_SECS.week);
     expect(w.chain.scans.length).toBeLessThanOrEqual(1 + 16); // one shared scan, plus at most one recheck per send
   });
 
-  it("scans a daily-only tick from today's start, or from an older open attempt", async () => {
+  it("scans a daily-only tick from today's start less the spacing, or from an older open attempt", async () => {
     const w = world();
     const plan = await addPlan(w.storage, w.chain, w.key, walletN(1), "day");
     await w.runner().tick();
-    expect(w.chain.scans[0]).toBe(periodStart(WED_NOON, "day"));
+    expect(w.chain.scans[0]).toBe(periodStart(WED_NOON, "day") - MIN_PURCHASE_SPACING_SECS.day);
     await w.storage.claimAttempt({ planId: plan.id, periodId: "2026-11-17", slot: "weekly", startedAt: WED_NOON - 86_400, amountIn: AMOUNT, minOut: 1n });
     w.chain.scans.length = 0;
     await w.runner().tick();

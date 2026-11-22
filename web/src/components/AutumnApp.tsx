@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { isFunded, type AutumnClient, type AutumnState } from "@/lib/autumn";
 import { useAutumn } from "@/lib/useAutumn";
 import { Logo } from "./Logo";
@@ -18,6 +18,47 @@ import type { TxHash } from "@/lib/autumn";
 
 type View = "auto" | "deposit" | "plan" | "send" | "backup" | "backup-new";
 
+/** Screens kept in the address (?screen=…) so Back returns to Home and a reload stays put. Never a half-done step. */
+const URL_VIEWS: readonly View[] = ["deposit", "plan", "send", "backup"];
+const viewFromUrl = (): View => {
+  const v = new URLSearchParams(window.location.search).get("screen") as View | null;
+  return v && URL_VIEWS.includes(v) ? v : "auto";
+};
+function urlFor(v: View): string {
+  const q = new URLSearchParams(window.location.search);
+  if (URL_VIEWS.includes(v)) q.set("screen", v);
+  else q.delete("screen");
+  const qs = q.toString();
+  return `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`;
+}
+
+/** The current screen, in step with the browser's history (Back, the Android back gesture, reload). */
+function useView(): [View, (v: View) => void] {
+  const [view, setViewState] = useState<View>("auto");
+  const current = useRef<View>("auto");
+  useEffect(() => {
+    const sync = () => {
+      current.current = viewFromUrl();
+      setViewState(current.current);
+    };
+    sync();
+    window.addEventListener("popstate", sync);
+    return () => window.removeEventListener("popstate", sync);
+  }, []);
+  const setView = useCallback((v: View) => {
+    if (current.current === v) return;
+    if (v === "auto" && (window.history.state as { autumn?: boolean } | null)?.autumn) {
+      window.history.back(); // the pushed screen goes; popstate sets the view
+      return;
+    }
+    if (URL_VIEWS.includes(v)) window.history.pushState({ autumn: true }, "", urlFor(v));
+    else window.history.replaceState(null, "", urlFor(v));
+    current.current = v;
+    setViewState(v);
+  }, []);
+  return [view, setView];
+}
+
 export function AutumnApp() {
   const load = useAutumn();
   const isPreview = load.isPreview;
@@ -34,7 +75,8 @@ export function AutumnApp() {
       <Backdrop />
       <Header />
       <main className="main" id="main">
-        {load.status === "loading" && <Loading />}
+        {load.status === "loading" && load.walletGuess === "none" && <Landing client={null} price={null} registration={null} fees={null} />}
+        {load.status === "loading" && load.walletGuess !== "none" && <Loading wallet={load.walletGuess === "stored"} />}
         {load.status === "unconnected" && <NotLive />}
         {load.status === "error" && <LoadError message={load.message} retry={load.retry} />}
         {load.status === "ready" && <Ready client={load.client} state={load.state} />}
@@ -71,7 +113,7 @@ function Backdrop() {
 }
 
 function Ready({ client, state }: { client: AutumnClient; state: AutumnState }) {
-  const [view, setView] = useState<View>("auto");
+  const [view, setView] = useView();
   const back = () => setView("auto");
   // A new screen starts at its top, not wherever the last one was scrolled to.
   useEffect(() => {
@@ -86,9 +128,7 @@ function Ready({ client, state }: { client: AutumnClient; state: AutumnState }) 
         registration={state.registration}
         fees={state.fees}
         notices={state.notices}
-        onCreated={(w) => {
-          if (w.passkey.discoverable !== true) setView("backup-new");
-        }}
+        onCreated={() => setView("backup-new")}
       />
     );
 
@@ -120,13 +160,15 @@ function Screen({
 }) {
   const onSendOut = () => setView("send");
   const onBackupCode = () => setView("backup");
-  if (view === "backup-new") return <BackupCode client={client} onDone={back} />;
-  if (view === "backup") return <BackupCode client={client} onDone={back} onBack={back} />;
+  const deviceBound = state.wallet?.passkey.discoverable !== true;
+  if (view === "backup-new") return <BackupCode client={client} onDone={back} deviceBound={deviceBound} />;
+  if (view === "backup") return <BackupCode client={client} onDone={back} onBack={back} deviceBound={deviceBound} />;
   if (view === "send") return <SendOut client={client} state={state} onBack={back} {...(state.plan ? { goldBuyer: state.plan.proof.calls[1]!.contract } : {})} />;
-  if (view === "deposit") return <Deposit state={state} onBack={back} onSendOut={onSendOut} onBackupCode={onBackupCode} />;
+  if (view === "deposit") return <Deposit client={client} state={state} onBack={back} onSendOut={onSendOut} onBackupCode={onBackupCode} />;
   if (view === "plan" && isFunded(state)) return <PlanPicker client={client} state={state} onDone={back} onBack={back} />;
-  if (view === "plan") return <Deposit state={state} onContinue={() => setView("plan")} onBack={back} onSendOut={onSendOut} onBackupCode={onBackupCode} />;
-  if (!hasPlan) return <Deposit state={state} onContinue={() => setView("plan")} onSendOut={onSendOut} onBackupCode={onBackupCode} />;
+  if (view === "plan")
+    return <Deposit client={client} state={state} onContinue={() => setView("plan")} onBack={back} onSendOut={onSendOut} onBackupCode={onBackupCode} forNewPlan={hasPlan} />;
+  if (!hasPlan) return <Deposit client={client} state={state} onContinue={() => setView("plan")} onSendOut={onSendOut} onBackupCode={onBackupCode} />;
 
   return (
     <Home
@@ -169,6 +211,7 @@ function StrayKey({ client, stray }: { client: AutumnClient; stray: NonNullable<
   const [error, setError] = useState<unknown>(null);
   const [done, setDone] = useState<{ txHash?: TxHash } | null>(null);
   const revoke = async () => {
+    if (busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -208,13 +251,13 @@ function StrayKey({ client, stray }: { client: AutumnClient; stray: NonNullable<
   );
 }
 
-function Loading() {
+function Loading({ wallet }: { wallet: boolean }) {
   return (
     <div className="loading" role="status">
       <div className="loading__lantern" aria-hidden="true">
         <Spinner />
       </div>
-      <p className="loading__text">Loading your wallet…</p>
+      <p className="loading__text">{wallet ? "Loading your wallet…" : "Loading…"}</p>
       <div className="skeleton" aria-hidden="true">
         <span className="skeleton__scene" />
         <span className="skeleton__line" />

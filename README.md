@@ -31,9 +31,12 @@ track.
    weeks. Confirming it grants the agent a session key with those limits,
    recorded in Altana's public Keystore. A week resets Monday 00:00 UTC and a
    day at 00:00 UTC, as the wallet contract counts them. A second passkey
-   prompt registers the agent's ERC-8004 identity. Optionally, the dip rule
+   prompt registers the agent's ERC-8004 identity (if it does not finish,
+   "Onchain proof" offers "Register identity"). Optionally, the dip rule
    adds one extra buy if the price is at least 2% below this period's
-   purchase price.
+   purchase price. The first purchase happens at the agent's next run; later
+   ones on the plan's weekday (weekly) or hour (daily), UTC, and at least
+   12 hours (daily) or 3 days (weekly) after the previous one.
 3. The agent buys gold on schedule through `GoldBuyer`, a small contract with
    no owner that can only swap USD₮ for XAUt0 and send it back to the caller.
    The session key can only call `USD₮.approve` and `GoldBuyer.buy`, and pays
@@ -57,9 +60,9 @@ track.
 
 ## Status and known limits
 
-- **GoldBuyer is unaudited** and not deployed yet. It is about 70 lines, has
-  no owner, and is fork-tested against Celo mainnet (`contracts/`). Until it
-  is deployed the app shows prices and balances but cannot start a plan.
+- **GoldBuyer is unaudited.** It is deployed on Celo mainnet (address in
+  [Deployed on Celo mainnet](#deployed-on-celo-mainnet)), is about 70 lines,
+  has no owner, and is fork-tested against Celo mainnet (`contracts/`).
 - **The funded mainnet run has not happened yet.** What it must prove is
   listed in [docs/mainnet-run.md](docs/mainnet-run.md).
 - **Relay dependency.** Purchases, revokes and "Send out" go through Altana's
@@ -175,7 +178,8 @@ mainnet. Reading needs no funds. A plan needs a funded wallet; see
      `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
    - `AUTUMN_GOLD_BUYER_ADDRESS` and `AUTUMN_GOLD_BUYER_DEPLOY_BLOCK`: the
      deployed GoldBuyer and its block. Put the same two values in the
-     `NEXT_PUBLIC_AUTUMN_…` lines. GoldBuyer is not deployed yet: until it is,
+     `NEXT_PUBLIC_AUTUMN_…` lines. The deployed address and block are in
+     [Deployed on Celo mainnet](#deployed-on-celo-mainnet). Without them
      the app shows the gold price and balances but says plans cannot start.
    - `NEXT_PUBLIC_AUTUMN_RP_ID=localhost` for local use. On a real domain, use
      that domain. Passkeys made for one rpId do not work on another.

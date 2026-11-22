@@ -55,7 +55,11 @@ export function sendLockKey(submitter: Address): bigint {
 export function pgSendLock(pool: pg.Pool, opts: { waitMs?: number } = {}): SendLock {
   const waitMs = opts.waitMs ?? 60_000;
   if (!Number.isInteger(waitMs) || waitMs < 1) throw new Error("waitMs must be a positive integer");
-  return async (submitter, fn) => {
+  // Waiters queue in this process first, so at most one pooled connection per EOA is held for the lock here: with
+  // several plans sending at once they would otherwise each hold a connection while waiting, and starve the storage
+  // queries (and, under Node, the web requests) that share the pool.
+  return (submitter, fn) => inProcessSendLock(submitter, () => locked(submitter, fn));
+  async function locked<T>(submitter: Address, fn: () => Promise<T>): Promise<T> {
     let client: pg.PoolClient;
     try {
       client = await pool.connect();
@@ -80,5 +84,5 @@ export function pgSendLock(pool: pg.Pool, opts: { waitMs?: number } = {}): SendL
       );
       client.release(!committed);
     }
-  };
+  }
 }

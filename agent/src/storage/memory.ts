@@ -62,6 +62,15 @@ export class MemoryStorage implements Storage {
     ).length;
   }
 
+  async deletePendingPlan(planId: string): Promise<boolean> {
+    const p = this.plans.get(planId);
+    if (!p || p.status !== "pending_grant") return false;
+    if (this.attempts.some((a) => a.planId === planId) || this.runLog.some((e) => e.planId === planId)) return false;
+    this.plans.delete(planId);
+    this.keys.delete(planId);
+    return true;
+  }
+
   async deletePendingPlansBefore(walletAddress: Address, before: number): Promise<number> {
     const w = walletAddress.toLowerCase();
     let n = 0;

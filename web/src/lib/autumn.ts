@@ -12,6 +12,8 @@
  */
 import {
   ALTANA_EXPLORER,
+  USDT as USDT_TOKEN,
+  maxSendable,
   DEFAULT_FEE_ALLOWANCE_PER_BUY,
   PLAN_DURATION_SECS,
   PLAN_DURATION_WEEKS,
@@ -50,6 +52,22 @@ export const keystoreKeyUrl = (keyId: `0x${string}`) => `${ALTANA_EXPLORER}/key/
 /** An ERC-8004 agent's page on 8004scan (the URL the Altana SDK uses for Celo). */
 export const agentScanUrl = (agentId: string) => `https://8004scan.io/agents/celo/${agentId}`;
 
+/**
+ * An action whose transaction may already be on its way: retrying it could pay twice, so the UI must offer only
+ * "Check again" (`checkStop`, `resumePlan`, `checkSend`), which reads the chain and never sends. `ref` names the
+ * transaction (Celoscan link) or the relay's call id when known.
+ */
+export class CheckAgainError extends Error {
+  readonly name = "CheckAgainError";
+  constructor(
+    readonly action: "plan" | "stop" | "send",
+    message: string,
+    readonly ref: { txHash?: TxHash; callsId?: string } = {},
+  ) {
+    super(message);
+  }
+}
+
 export interface Wallet {
   address: Address;
   createdAt: Date;
@@ -71,6 +89,10 @@ export interface WalletPasskey {
 /** What the wallet backup code is, in plain words, for the screen that shows it. */
 export const BACKUP_CODE_TEXT =
   "This code lets Autumn find your passkey again on this device if the browser's data is cleared. It contains no private key and cannot move funds. It only works on the device that holds the passkey: if this device is reset or the passkey is deleted, the wallet cannot be used again. Keep small amounts, and use \"Send out\" to move funds to an address you control.";
+
+/** The backup code for a synced (discoverable) passkey: a second way back in. */
+export const BACKUP_CODE_SYNCED_TEXT =
+  "Your passkey is saved to your account and syncs to your devices, so \"I already have an Autumn passkey\" finds this wallet. This code is a second way back in: it names your wallet and passkey, so Autumn can find them even if that lookup fails. It contains no private key and cannot move funds, and it only works together with your passkey.";
 
 export interface Balances {
   /** USD₮ in base units (6 decimals). */
@@ -153,6 +175,8 @@ export interface Plan {
   startedAt: Date;
   /** Next scheduled buy, or null if none is scheduled. In the past: due now, waiting for the agent's next run. */
   nextPurchaseAt: Date | null;
+  /** True while the purchase history is still being read: nextPurchaseAt is not known yet (never show "due now"). */
+  historyLoading: boolean;
   limits: Limits;
   /** Transaction that wrote the limits onchain, when known. */
   txHash?: TxHash;
@@ -233,8 +257,11 @@ export interface AutumnState {
   agent: AgentStatus;
   /** Newest first. */
   activity: ActivityItem[];
-  /** The wallet's ERC-8004 agent identity, when known. agentId is set when it could be found. */
-  identity: { registered: boolean; agentId?: string } | null;
+  /**
+   * The wallet's ERC-8004 agent identity, read from the Identity Registry; null when it could not be read. agentId is
+   * set when it could be found. `lastError` is why the last registration attempt in this browser did not finish.
+   */
+  identity: { registered: boolean; agentId?: string; lastError?: string } | null;
   /** CELO price and fee estimates; null when they could not be read. */
   fees: FeeFacts | null;
   /**
@@ -303,16 +330,41 @@ export interface AutumnClient {
    * the wallet. No passkey prompt. Rejects with a `BackupCodeError` for a malformed code and a plain Error otherwise.
    */
   restoreFromBackupCode(code: string): Promise<Wallet>;
-  /** Write the plan limits onchain and start the agent. */
+  /**
+   * Write the plan limits onchain and start the agent. First settles any grant this browser already sent: a key the
+   * chain shows granted is started, never granted again. Rejects with CheckAgainError when a grant may be on its way.
+   */
   confirmPlan(input: PlanInput): Promise<Plan>;
-  /** Revoke the agent onchain. Resolves once the chain shows the revoke. */
+  /**
+   * "Check again" after confirmPlan's CheckAgainError: reads the chain and starts a granted plan. Never grants or
+   * pays. Resolves with the running plan, or null when no grant is waiting (confirming again is then safe); rejects
+   * with CheckAgainError while one may still land.
+   */
+  resumePlan(): Promise<Plan | null>;
+  /**
+   * Revoke the agent onchain. Resolves once the chain shows the revoke. While one stop is in flight, a second call
+   * returns the same promise. Rejects with CheckAgainError when the revoke was sent but Celo does not show it yet.
+   */
   stopAgent(): Promise<{ txHash?: TxHash }>;
+  /**
+   * "Check again" after stopAgent's CheckAgainError: reads the chain, never sends. Resolves once the revoke shows;
+   * rejects with CheckAgainError while it is pending, or with a plain Error (stopping again is then safe) when the
+   * chain proves the first revoke failed.
+   */
+  checkStop(): Promise<{ txHash?: TxHash }>;
+  /** Register the wallet's ERC-8004 agent identity (one passkey prompt), and confirm it by reading the registry. */
+  registerIdentity(): Promise<{ agentId: string | null; txHash?: TxHash }>;
   /** Revoke `state.strayKey` onchain. Resolves once the chain shows it revoked. */
   revokeStrayKey(): Promise<{ txHash?: TxHash }>;
   /** What sending would cost, and the most that can be sent. Nothing is signed. `amount` defaults to the whole balance. */
   quoteSend(req: { asset: SendAsset; to?: Address; amount?: bigint }): Promise<SendQuote>;
-  /** Send funds out with the passkey. Resolves once the chain shows the transfer and balances are re-read. */
+  /**
+   * Send funds out with the passkey. Resolves once the chain shows the transfer and balances are re-read. Rejects with
+   * CheckAgainError (never "not sent") once the transfer may be on its way.
+   */
   send(req: SendRequest): Promise<SendResult>;
+  /** "Check again" after send's CheckAgainError: reads the transfer's status, never sends. */
+  checkSend(req: SendRequest, ref: { txHash?: TxHash; callsId?: string }): Promise<SendResult>;
 }
 
 /* ---------- Plan rules shared by every implementation ---------- */
@@ -370,6 +422,14 @@ export function draftLimits(input: Pick<PlanInput, "amount" | "period" | "buyThe
 /** USD₮ to deposit to cover a whole plan: every scheduled buy plus its fee allowance (dip buys not included). */
 export function suggestedDeposit(amount: bigint, period: PlanPeriod): bigint {
   return (amount + DEFAULT_FEE_ALLOWANCE_PER_BUY) * BigInt(periodsInPlan(period));
+}
+
+/**
+ * The most of `asset` that can be sent from `balance` with this fee quote: computed from the balance shown now, so a
+ * balance that changed since the quote changes it too.
+ */
+export function sendMax(asset: SendAsset, balance: bigint, quote: Pick<SendQuote, "fee" | "feeSymbol" | "registrationCelo">): bigint {
+  return maxSendable(asset, balance, { fee: quote.fee, feeToken: quote.feeSymbol === "CELO" ? "0x0000000000000000000000000000000000000000" : USDT_TOKEN, extraNative: quote.registrationCelo });
 }
 
 /** Whether deposits are enough to choose a plan: some USD₮, and the CELO the grant's registration needs. */

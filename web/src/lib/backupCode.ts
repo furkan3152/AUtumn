@@ -113,7 +113,12 @@ export function encodeBackupCode(d: BackupData): string {
 export function decodeBackupCode(input: string): BackupData {
   const text = input.replace(/\s+/g, "");
   if (!text.toLowerCase().startsWith(BACKUP_CODE_PREFIX.slice(0, 6))) throw new BackupCodeError("This is not an Autumn wallet backup code.");
-  if (!text.startsWith(BACKUP_CODE_PREFIX)) throw new BackupCodeError("This backup code is from a version of Autumn this app does not read.");
+  const damaged = "This backup code is damaged or was changed (its letters are case-sensitive). Paste it exactly as you saved it.";
+  // The code is case-sensitive base64url: "AUTUMN1-…" is the right code with its letters changed, not another version.
+  if (!text.startsWith(BACKUP_CODE_PREFIX)) {
+    if (text.toLowerCase().startsWith(BACKUP_CODE_PREFIX) || !/^autumn\d+-/.test(text)) throw new BackupCodeError(damaged);
+    throw new BackupCodeError("This backup code is from a version of Autumn this app does not read.");
+  }
   let all: Uint8Array;
   try {
     all = base64UrlToBytes(text.slice(BACKUP_CODE_PREFIX.length));
@@ -124,7 +129,7 @@ export function decodeBackupCode(input: string): BackupData {
   if (all.length < 2 + 20 + 64 + 2 + 1 + 1 + CHECKSUM_BYTES) throw tooShort;
   const body = all.slice(0, all.length - CHECKSUM_BYTES);
   const sum = all.slice(all.length - CHECKSUM_BYTES);
-  if (!checksum(body).every((b, i) => b === sum[i])) throw new BackupCodeError("The backup code does not check out: a character is wrong or missing. Copy it again.");
+  if (!checksum(body).every((b, i) => b === sum[i])) throw new BackupCodeError(damaged);
   let o = 0;
   if (body[o++] !== VERSION) throw new BackupCodeError("This backup code is from a version of Autumn this app does not read.");
   const flags = body[o++]!;

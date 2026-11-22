@@ -3,7 +3,7 @@
  * the screens show. Purchases come only from GoldBuyer `Bought` events; the
  * run log adds what never reaches the chain (skips and relay refusals).
  */
-import { nextDueTime, periodStart, type PlanPeriod, type Purchase, type SessionStatus, type TxFacts } from "@autumn/core";
+import { nextScheduledPurchase, periodStart, priceUsdtPerXaut, type PlanPeriod, type Purchase, type SessionStatus, type TxFacts } from "@autumn/core";
 import type { PlanView, RunLogView } from "@autumn/agent";
 import type { ActivityItem, AgentStatus, RefusalReason, TxHash } from "./autumn";
 
@@ -18,7 +18,9 @@ export function planAt(plans: readonly PlanView[], t: number): PlanView | undefi
 
 /** Chain purchases as activity. The second purchase in a plan's period is the dip buy. */
 export function purchaseItems(purchases: readonly Purchase[], plans: readonly PlanView[]): ActivityItem[] {
-  const sorted = [...purchases].sort((a, b) => (a.blockNumber === b.blockNumber ? a.logIndex - b.logIndex : a.blockNumber < b.blockNumber ? -1 : 1));
+  const sorted = [...purchases].sort((a, b) =>
+    a.timestamp !== b.timestamp ? a.timestamp - b.timestamp : a.blockNumber === b.blockNumber ? a.logIndex - b.logIndex : a.blockNumber < b.blockNumber ? -1 : 1,
+  );
   const seen = new Map<string, number>();
   return sorted.map((p) => {
     const plan = planAt(plans, p.timestamp);
@@ -158,12 +160,35 @@ export function agentStatusFor(args: {
   return { kind: "active" };
 }
 
-/** Next scheduled purchase for an active plan, or null when none is scheduled before the plan ends. */
+/** The server's run log entries "bought", as purchases (the agent records every purchase it makes). */
+export function runLogPurchases(runLog: readonly RunLogView[], wallet: `0x${string}`): Purchase[] {
+  return runLog
+    .filter((e) => e.outcome === "bought" && e.txHash && e.amountIn !== undefined && e.out !== undefined)
+    .map((e) => {
+      const amountIn = BigInt(e.amountIn!);
+      const out = BigInt(e.out!);
+      return { buyer: wallet, amountIn, out, priceUsdtPerXaut: out > 0n ? priceUsdtPerXaut(amountIn, out) : 0n, txHash: e.txHash as `0x${string}`, blockNumber: 0n, logIndex: 0, timestamp: e.at };
+    });
+}
+
+/** Chain purchases, plus run-log purchases the scan has not reached yet (one per transaction; the chain's copy wins). */
+export function mergePurchases(chain: readonly Purchase[], fromLog: readonly Purchase[]): Purchase[] {
+  const seen = new Set(chain.map((p) => p.txHash.toLowerCase()));
+  return [...chain, ...fromLog.filter((p) => !seen.has(p.txHash.toLowerCase()))];
+}
+
+/**
+ * Next scheduled purchase for an active plan, or null when none is scheduled before the plan ends. The same rule the
+ * runner buys by (nextScheduledPurchase in @autumn/core): a new plan's first purchase is due at once.
+ */
 export function nextPurchaseFor(plan: PlanView, purchases: readonly Purchase[], now: number, agent: AgentStatus): Date | null {
   if (agent.kind !== "active") return null;
+  const own = purchases.filter((p) => p.timestamp >= plan.createdAt);
   const start = periodStart(now, plan.period);
-  const bought = purchases.some((p) => p.timestamp >= start && p.timestamp >= plan.createdAt);
-  const t = nextDueTime(now, plan.period, plan.dayOfWeek, plan.hourUtc, bought);
+  const t = nextScheduledPurchase(plan, now, {
+    lastPurchaseAt: own.length ? Math.max(...own.map((p) => p.timestamp)) : null,
+    boughtThisPeriod: own.some((p) => p.timestamp >= start),
+  });
   return t < plan.expiresAt ? new Date(t * 1000) : null;
 }
 

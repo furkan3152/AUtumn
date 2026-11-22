@@ -42,9 +42,13 @@ function newPool(): pg.Pool {
   return new pg.Pool({ connectionString: c.databaseUrl, max: 3 });
 }
 
-/** Per server instance (per isolate on Workers): at most 10 new plans per client address per 10 minutes. */
+/**
+ * Per server instance (per isolate on Workers): at most 60 plan requests per client address per 10 minutes. Testers
+ * often share one Wi-Fi address, and a retry of the same plan reuses its key, so this only stops floods; the
+ * per-wallet cap in the service still applies.
+ */
 function limiter(): RateLimiter {
-  return (holder.limiter ??= createRateLimiter({ limit: 10, windowMs: 10 * 60_000 }));
+  return (holder.limiter ??= createRateLimiter({ limit: 60, windowMs: 10 * 60_000 }));
 }
 
 /** Runs `fn` with a pool: the shared one under Node, a fresh one closed afterwards on Workers. */
@@ -87,7 +91,7 @@ export async function handle(fn: () => Promise<unknown>): Promise<NextResponse> 
   try {
     return json(await fn());
   } catch (e) {
-    if (e instanceof HttpError) return json({ error: e.message }, e.status);
+    if (e instanceof HttpError) return json({ ...(e.extra ?? {}), error: e.message, ...(e.code ? { code: e.code } : {}) }, e.status);
     const msg = (e as Error).message ?? "unexpected error";
     if (/is not set|is missing|must be 32 bytes/.test(msg)) return json({ error: "the Autumn server is not configured" }, 503);
     console.error(JSON.stringify({ msg: "request failed", error: msg }));
@@ -112,4 +116,18 @@ export async function readBody(req: Request): Promise<unknown> {
   } catch {
     throw new HttpError(400, "the request body must be JSON");
   }
+}
+
+/** A JSON 405 for a method a route does not offer, with the Allow header. */
+export function notAllowed(...allow: string[]) {
+  return () =>
+    new NextResponse(JSON.stringify({ error: `this endpoint accepts ${allow.join(", ")} only`, code: "method_not_allowed" }), {
+      status: 405,
+      headers: { "content-type": "application/json", "cache-control": "no-store", allow: allow.join(", ") },
+    });
+}
+
+/** A JSON 404 for an unknown /api path. */
+export function notFound() {
+  return json({ error: "no such endpoint", code: "not_found" }, 404);
 }

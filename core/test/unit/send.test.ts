@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { decodeFunctionData, getAddress, parseAbi, zeroAddress, type Address } from "viem";
 import { USDT, XAUT0 } from "../../src/constants.js";
-import { buildSendCall, checkDestination, maxSendable, parseAmount } from "../../src/send.js";
+import { buildSendCall, checkDestination, maxSendable, parseAmount, parseAmountText } from "../../src/send.js";
 
 const WALLET = getAddress("0x2222222222222222222222222222222222222222") as Address;
 const GB = getAddress("0x1111111111111111111111111111111111111111") as Address;
@@ -35,12 +35,35 @@ describe("parseAmount", () => {
     expect(parseAmount("12.5", 6)).toBe(12_500_000n);
     expect(parseAmount("0.000001", 6)).toBe(1n);
     expect(parseAmount(".5", 6)).toBe(500_000n);
-    expect(parseAmount("1,000", 6)).toBe(1_000_000_000n);
+    expect(parseAmount("1,000", 6)).toBe(1_000_000n); // a single comma is a decimal separator, never thousands
     expect(parseAmount("1.5", 18)).toBe(1_500_000_000_000_000_000n);
   });
 
   it("refuses zero, negatives, too many decimals and junk", () => {
     for (const bad of ["", "0", "0.0", "-1", "1e3", "abc", "1.0000001", ".", "1.2.3"]) expect(parseAmount(bad, 6)).toBeNull();
+  });
+});
+
+describe("parseAmountText (decimal comma)", () => {
+  it("reads a single comma with 1-6 digits after it as the decimal separator", () => {
+    expect(parseAmount("1,5", 6)).toBe(1_500_000n);
+    expect(parseAmount(" 0,25 ", 6)).toBe(250_000n);
+    expect(parseAmount(",5", 6)).toBe(500_000n);
+    expect(parseAmount("2,123456", 6)).toBe(2_123_456n);
+  });
+
+  it("refuses both separators, several commas or a long comma tail with a plain message", () => {
+    for (const bad of ["1,000.5", "1.000,5", "1,000,000", "1,1234567", "1,"]) {
+      const r = parseAmountText(bad, 6);
+      expect(r.ok, bad).toBe(false);
+      if (!r.ok) expect(r.problem).toMatch(/decimal separator/);
+    }
+  });
+
+  it("says why an amount is refused", () => {
+    expect(parseAmountText("", 6)).toEqual({ ok: false, problem: "Enter an amount." });
+    expect(parseAmountText("1.0000001", 6)).toEqual({ ok: false, problem: "Enter at most 6 decimals." });
+    expect(parseAmountText("0", 6)).toEqual({ ok: false, problem: "Enter an amount above zero." });
   });
 });
 

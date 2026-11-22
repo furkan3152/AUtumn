@@ -105,6 +105,7 @@ function makePlan(input: Omit<PlanInput, "expiresAt">, startedAt: Date, nextPurc
     buyTheDip: input.buyTheDip,
     startedAt,
     nextPurchaseAt,
+    historyLoading: false,
     txHash: fakeHash(),
     proof: {
       publicKey: PREVIEW_KEY,
@@ -202,7 +203,7 @@ export function createPreviewClient(): AutumnClient {
   const passkeyError = params?.get("passkeyError") as PasskeyFailureReason | null;
   const createdDiscoverable: Discoverable = name === "fresh-device-bound" ? false : true;
   const rpId = typeof window === "undefined" ? "localhost" : window.location.hostname.toLowerCase();
-  const failPasskey = (step: "create" | "find") => {
+  const failPasskey = (step: "create" | "find" | "sign") => {
     if (!passkeyError || !(passkeyError in PASSKEY_ERROR_NAMES)) return;
     throw passkeyFailure({ name: PASSKEY_ERROR_NAMES[passkeyError], message: "preview" }, step)!;
   };
@@ -333,7 +334,7 @@ export function createPreviewClient(): AutumnClient {
         agent: { kind: "active" },
         registration: { walletRegistered: true, nextGrantFeeCelo: FEE / 2n, perKeyFeeCelo: FEE / 2n },
         balances: { ...balances, celo: balances.celo - fee, observedAt: now },
-        identity: { registered: true },
+        identity: { registered: false },
         activity: [
           { kind: "plan-started", id: `plan${now.getTime()}`, at: now, amount: input.amount, period: input.period, txHash: plan.txHash },
           ...(firstGrant ? [{ kind: "registration" as const, id: `reg${now.getTime()}`, at: new Date(now.getTime() - 1), txHash: regTx }] : []),
@@ -343,6 +344,26 @@ export function createPreviewClient(): AutumnClient {
       emit();
       scheduleWeekly();
       return plan;
+    },
+    async resumePlan() {
+      await wait(600);
+      return state.agent.kind === "active" ? state.plan : null;
+    },
+    async registerIdentity() {
+      await wait(1200);
+      failPasskey("sign");
+      state = { ...state, identity: { registered: true, agentId: "1287" } };
+      emit();
+      return { agentId: "1287", txHash: fakeHash() };
+    },
+    async checkStop() {
+      await wait(600);
+      return state.agent.kind === "stopped" && state.agent.txHash ? { txHash: state.agent.txHash } : {};
+    },
+    async checkSend(req: SendRequest, ref: { txHash?: TxHash }) {
+      await wait(600);
+      if (!ref.txHash || !state.balances) throw new Error("Nothing to check (preview).");
+      return { txHash: ref.txHash, balances: state.balances };
     },
     async revokeStrayKey() {
       await wait(1500);

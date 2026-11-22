@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { forwardRef, useState } from "react";
 import { encode } from "uqr";
-import { PasskeyError, txUrl, type TxHash, type Wallet } from "@/lib/autumn";
+import { CheckAgainError, PasskeyError, isAndroid, txUrl, type TxHash, type Wallet } from "@/lib/autumn";
 import { errorText } from "@/lib/useAutumn";
 import { Icon, type IconName } from "./icons";
 
@@ -98,9 +98,9 @@ type BtnProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   block?: boolean;
 };
 
-export function Button({ variant = "primary", block, className = "", ...rest }: BtnProps) {
-  return <button type="button" className={`btn btn--${variant} ${block ? "btn--block" : ""} ${className}`} {...rest} />;
-}
+export const Button = forwardRef<HTMLButtonElement, BtnProps>(function Button({ variant = "primary", block, className = "", ...rest }, ref) {
+  return <button ref={ref} type="button" className={`btn btn--${variant} ${block ? "btn--block" : ""} ${className}`} {...rest} />;
+});
 
 export function CopyButton({ text, label = "Copy", what = "address" }: { text: string; label?: string; what?: string }) {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
@@ -196,15 +196,38 @@ export function FailureNotice({
   onRetry,
   onDeviceFallback,
   prefix = "",
+  onCheckAgain,
 }: {
   error: unknown;
-  onRetry?: () => void;
+  onRetry?: (() => void) | undefined;
+  /**
+   * For a CheckAgainError (the action may already be on its way): reads the chain again, never re-sends. Without it
+   * no button is shown for such an error; Retry is never offered for one.
+   */
+  onCheckAgain?: (() => void) | undefined;
   /** Offered after a cancelled or unsupported passkey creation: create the passkey with this device's screen lock. */
   onDeviceFallback?: () => void;
   prefix?: string;
 }) {
   if (error === null || error === undefined) return null;
+  if (error instanceof CheckAgainError) {
+    return (
+      <div className="failure" role="alert">
+        <p className="failure__title">
+          <Icon name="hourglass" /> Waiting for Celo
+        </p>
+        <p>{error.message}</p>
+        {error.ref.txHash && <TxLink hash={error.ref.txHash} label="View the transaction on Celoscan" />}
+        {onCheckAgain && (
+          <Button variant="plain" className="btn--small" onClick={onCheckAgain}>
+            Check again
+          </Button>
+        )}
+      </div>
+    );
+  }
   if (error instanceof PasskeyError) {
+    const android = isAndroid();
     const fallback = onDeviceFallback && error.step === "create" && (error.reason === "cancelled" || error.reason === "unsupported");
     return (
       <div className="failure" role="alert">
@@ -212,7 +235,7 @@ export function FailureNotice({
           <Icon name="passkey" /> The passkey step did not finish
         </p>
         <p>{error.message}</p>
-        {error.reason === "unsupported" && <p className="failure__hint">On Android, open this page in Chrome.</p>}
+        {error.reason === "unsupported" && android && <p className="failure__hint">On Android, open this page in Chrome.</p>}
         {onRetry && (
           <Button variant="plain" className="btn--small" onClick={onRetry}>
             Retry
@@ -221,9 +244,11 @@ export function FailureNotice({
         {fallback && (
           <>
             <Button variant="plain" className="btn--small" onClick={onDeviceFallback}>
-              Use this phone&apos;s screen lock instead
+              {android ? "Use this phone's screen lock instead" : "Use this device's screen lock instead"}
             </Button>
-            <p className="small">If your phone only offered another device or a USB key, choose this. The passkey will live on this device only.</p>
+            <p className="small">
+              If your {android ? "phone" : "device"} only offered another device or a USB key, choose this. The passkey will live on this device only.
+            </p>
           </>
         )}
       </div>
@@ -240,12 +265,12 @@ export function FailureNotice({
 /** True when the wallet's passkey may be device-bound, so the backup code matters. */
 export const isDeviceBound = (w: Wallet | null | undefined) => !!w && w.passkey.discoverable !== true;
 
-/** The reminder chip for a device-bound passkey, with a way to see the backup code again. */
-export function BackupChip({ onBackupCode }: { onBackupCode: () => void }) {
+/** The passkey reminder chip, with a way to see the backup code again (every wallet has one). */
+export function BackupChip({ onBackupCode, deviceBound = true }: { onBackupCode: () => void; deviceBound?: boolean }) {
   return (
     <p className="chip">
       <Icon name="passkey" />
-      <span>Passkey lives on this device only.</span>
+      <span>{deviceBound ? "Passkey lives on this device only." : "Passkey synced to your account."}</span>
       <button type="button" className="chip__btn" onClick={onBackupCode}>
         Backup code
       </button>

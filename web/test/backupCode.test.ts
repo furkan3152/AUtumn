@@ -71,6 +71,14 @@ describe("backup code", () => {
     expect(() => decodeBackupCode(code + "AA")).toThrow(BackupCodeError);
   });
 
+  it("calls an all-uppercase or edited code damaged (case-sensitive), not another version", () => {
+    const code = encodeBackupCode({ wallet: "0x15855ae2E04Fd00eFA45cB70D2C29E5777925429", credentialId: "AAECAwQFBgcICQ", publicKey: `0x${"11".repeat(64)}`, rpId: "autumn.example", discoverable: true });
+    expect(() => decodeBackupCode(code.toUpperCase())).toThrow(/damaged or was changed.*exactly/);
+    const flipped = code.slice(0, -3) + (code.at(-3) === "A" ? "a" : "A") + code.slice(-2);
+    expect(() => decodeBackupCode(flipped)).toThrow(/damaged|characters/);
+    expect(decodeBackupCode(` ${code}\n`).wallet).toBe("0x15855ae2E04Fd00eFA45cB70D2C29E5777925429");
+  });
+
   it("names the problem for foreign text and other versions", () => {
     expect(() => decodeBackupCode("hello")).toThrow(/not an Autumn wallet backup code/);
     expect(() => decodeBackupCode("autumn2-AAAA")).toThrow(/version/);

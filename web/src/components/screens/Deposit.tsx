@@ -1,18 +1,24 @@
 "use client";
 
-import { addressUrl, isFunded, type AutumnState } from "@/lib/autumn";
+import { addressUrl, isFunded, type AutumnClient, type AutumnState } from "@/lib/autumn";
 import { celo, formatDateTime, usdt } from "@/lib/format";
 import { CostsList } from "../Costs";
 import { BackupChip, Button, CopyButton, ExtLink, Label, Panel, Qr, ScreenHead, Spinner, Trail, isDeviceBound } from "../ui";
+import { IdentityLine } from "./Home";
 
 export function Deposit({
+  client,
   state,
   onContinue,
   onBack,
   onSendOut,
   onBackupCode,
+  forNewPlan,
 }: {
+  client?: AutumnClient;
   state: AutumnState;
+  /** Opened from "Start a new plan" without enough CELO: say how much more the new plan's registration needs. */
+  forNewPlan?: boolean;
   onContinue?: () => void;
   onBack?: () => void;
   onSendOut?: () => void;
@@ -50,7 +56,12 @@ export function Deposit({
             </div>
           </div>
         </div>
-        {onBackupCode && isDeviceBound(wallet) && <BackupChip onBackupCode={onBackupCode} />}
+        {onBackupCode && <BackupChip onBackupCode={onBackupCode} deviceBound={isDeviceBound(wallet)} />}
+        {client && state.plan === null && reg?.walletRegistered && (
+          <p className="muted small">
+            Agent identity: <IdentityLine client={client} identity={state.identity} />
+          </p>
+        )}
       </Panel>
 
       <Panel title="Balances" icon="pouch">
@@ -98,6 +109,17 @@ export function Deposit({
       </div>
 
       <div className="screen__actions">
+      {forNewPlan && !funded && b && reg && b.celo < reg.nextGrantFeeCelo && (
+        <p className="note" role="status">
+          A new plan needs about <span className="num">{celo(reg.nextGrantFeeCelo - b.celo)}</span> more CELO for Altana&apos;s registration
+          of the agent&apos;s new key (<span className="num">{celo(reg.nextGrantFeeCelo)}</span> CELO in all).
+        </p>
+      )}
+      {forNewPlan && !funded && b && b.usdt === 0n && (
+        <p className="note" role="status">
+          A new plan needs some USD₮ in the wallet to buy with.
+        </p>
+      )}
       {funded && onContinue ? (
         <Button block onClick={onContinue}>
           Continue: choose a plan

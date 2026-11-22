@@ -23,7 +23,7 @@ import {
   type PasskeyWebAuthnFns,
   RELAY_URL,
 } from "@altananetwork/sdk";
-import { BaseError, ContractFunctionRevertedError, ContractFunctionZeroDataError, toHex, type Hex } from "viem";
+import { BaseError, ContractFunctionRevertedError, ContractFunctionZeroDataError, getAddress, toHex, type Hex } from "viem";
 import {
   XAUT0,
   USDT,
@@ -59,8 +59,10 @@ import {
   type TxFacts,
 } from "@autumn/core";
 import type { CreatePlanResponse, PlanView, WalletView } from "@autumn/agent";
-import { agentStatusFor, buildActivity, currentPlan, nextPurchaseFor, planItems, purchaseItems, runLogItems } from "./activity";
+import { agentStatusFor, buildActivity, currentPlan, mergePurchases, nextPurchaseFor, planItems, purchaseItems, runLogItems, runLogPurchases } from "./activity";
+import { ApiError, activateVerdict, backoffDelays, checkGrantOnchain } from "./pending";
 import {
+  CheckAgainError,
   DECIMALS,
   ORCHESTRATOR_ENTRY_TEXT,
   type Address,
@@ -133,6 +135,12 @@ type StoredPending = {
   plan: { amountPerBuy: string; period: PlanPeriod; dipBuy: boolean; expiresAt: number };
   createdAt: number;
   txHash?: TxHash;
+  /**
+   * When the passkey prompt for this grant was opened and did not end in a cancelled prompt: the grant may have been
+   * signed and sent even without a transaction hash (the relay was slow, the tab closed). Such a key is never granted
+   * again until the chain has settled it.
+   */
+  sentAt?: number;
 };
 type SerializedPurchase = Omit<Purchase, "amountIn" | "out" | "priceUsdtPerXaut" | "blockNumber"> & {
   amountIn: string;
@@ -153,30 +161,30 @@ function saveJson(key: string, v: unknown) {
   window.localStorage.setItem(key, JSON.stringify(v, (_k, x) => (typeof x === "bigint" ? x.toString() : x)));
 }
 
-class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
 async function api<T>(path: string, init?: { method?: string; body?: unknown }): Promise<T> {
-  const res = await fetch(path, {
-    method: init?.method ?? "GET",
-    headers: init?.body !== undefined ? { "content-type": "application/json" } : {},
-    ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-    cache: "no-store",
-  });
-  const text = await res.text();
+  let res: Response;
+  let text: string;
+  try {
+    res = await fetch(path, {
+      method: init?.method ?? "GET",
+      headers: init?.body !== undefined ? { "content-type": "application/json" } : {},
+      ...(init?.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+      cache: "no-store",
+    });
+    text = await res.text();
+  } catch {
+    throw new ApiError(0, "The Autumn server could not be reached.", "network");
+  }
   let data: unknown = null;
   try {
     data = text ? JSON.parse(text) : null;
   } catch {
     /* not JSON */
   }
-  if (!res.ok) throw new ApiError(res.status, (data as { error?: string } | null)?.error ?? `The Autumn server answered ${res.status}.`);
+  if (!res.ok) {
+    const body = (data && typeof data === "object" ? data : {}) as Record<string, unknown>;
+    throw new ApiError(res.status, typeof body.error === "string" ? body.error : `The Autumn server answered ${res.status}.`, typeof body.code === "string" ? body.code : undefined, body);
+  }
   return data as T;
 }
 
@@ -185,16 +193,13 @@ const celoToUsdtUnit = (rate: { numerator: bigint; denominator: bigint }) => (10
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** The transfer's transaction is onchain, but the balance check afterwards could not be read. */
-export class SendSubmittedError extends Error {
-  readonly txHash: string;
-  constructor(txHash: string, cause?: unknown) {
-    super(`The transfer was sent (${txHash}), but Celo's public node did not answer the balance check. Do not send again: view the transaction on Celoscan, then reload.`);
-    this.name = "SendSubmittedError";
-    this.txHash = txHash;
-    this.cause = cause;
-  }
-}
+/** The transfer may be on its way: never "not sent", never a second send. */
+const sendPending = (ref: { txHash?: TxHash; callsId?: string }, what: string) =>
+  new CheckAgainError(
+    "send",
+    `${what} Do not send again: ${ref.txHash ? "check the transaction on Celoscan, or" : "the relay is still working on it;"} tap "Check again" in a minute.`,
+    ref,
+  );
 const errText = (e: unknown) => (e instanceof Error && e.message ? e.message : String(e));
 
 export function createLiveClient(cfg: PublicConfig): AutumnClient {
@@ -216,7 +221,8 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
   const emit = () => listeners.forEach((l) => l());
   const facts = new Map<string, TxFacts | null>();
   let timer: ReturnType<typeof setInterval> | null = null;
-  let stopping: { txHash?: TxHash } | null = null;
+  /** A stop in progress: kept (with its revoke's hash) until the chain shows the key revoked, so it is never sent twice. */
+  let stopping: { txHash?: TxHash; planId?: string; publicKey?: `0x${string}`; wallet?: Address; startedAt: number } | null = null;
   let goldBuyerHasCode: boolean | null = null;
   let serverMode: { configured: boolean; live: boolean } | null = null;
   const last: {
@@ -225,7 +231,7 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     registration?: Registration;
     view?: WalletView;
     sessions: Map<string, { state: SessionState; at: Date }>;
-    identity?: { registered: boolean; agentId?: string };
+    identity?: AutumnState["identity"];
     purchases?: Purchase[];
     fees?: FeeFacts;
   } = { sessions: new Map() };
@@ -326,6 +332,32 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     return "relay";
   }
 
+  /**
+   * A discoverable passkey whose wallet has not transacted yet: the user handle names the wallet, and the Altana
+   * relay's record of its first transaction names the admin key. The key is taken only when the relay lists exactly
+   * one passkey admin key whose hash matches it. Otherwise it cannot be rebuilt without data saved earlier: the
+   * backup code is the way back in.
+   */
+  async function restoreBeforeFirstTransaction(wallet: Address, credentialId: string): Promise<{ address: Address; credential: PasskeyCredential }> {
+    let keys: Awaited<ReturnType<typeof relayAdminKeys>>;
+    try {
+      keys = await relayAdminKeys(wallet);
+    } catch {
+      throw new Error(
+        `Your passkey belongs to wallet ${wallet}, which has not made a transaction yet. Its key is read from the Altana relay, which could not be reached. Try again in a minute, or restore with your backup code.`,
+      );
+    }
+    const admins = keys.filter(
+      (k) => k.type === "webauthnp256" && k.role === "admin" && /^0x[0-9a-fA-F]{128}$/.test(k.publicKey ?? "") && k.hash?.toLowerCase() === webAuthnKeyHash(k.publicKey as Hex).toLowerCase(),
+    );
+    if (admins.length !== 1) {
+      throw new Error(
+        `Your passkey belongs to wallet ${wallet}, which has not made a transaction yet, and its key cannot be found without data this browser no longer has. Restore with your backup code instead.`,
+      );
+    }
+    return { address: getAddress(wallet), credential: { kind: "webauthn", id: credentialId, publicKey: admins[0]!.publicKey as Hex, rpId: cfg.rpId } };
+  }
+
   async function loadTxFacts(hash: string | null | undefined, wallet: Address): Promise<void> {
     if (!hash) return;
     const k = hash.toLowerCase();
@@ -337,35 +369,79 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     }
   }
 
-  /** GoldBuyer purchases by the wallet from `fromBlock`, scanned incrementally; blocks below the reorg margin are cached. */
+  type PurchaseCache = { from: string; to: string; items: SerializedPurchase[] };
+  const revive = (p: SerializedPurchase): Purchase => ({
+    ...p,
+    amountIn: BigInt(p.amountIn),
+    out: BigInt(p.out),
+    priceUsdtPerXaut: BigInt(p.priceUsdtPerXaut),
+    blockNumber: BigInt(p.blockNumber),
+  });
+  /** Purchases saved by earlier scans (possibly partial), for showing while a scan runs or after it failed. */
+  const cachedPurchases = (wallet: Address): Purchase[] => (loadJson<PurchaseCache>(purchasesKey(cfg.goldBuyer, wallet))?.items ?? []).map(revive);
+
+  /**
+   * GoldBuyer purchases by the wallet from `fromBlock`, scanned incrementally. Progress is saved after every batch of
+   * log windows (blocks below the reorg margin), so a scan that fails or is interrupted resumes where it stopped.
+   */
   async function readWalletPurchases(wallet: Address, fromBlock: bigint): Promise<Purchase[]> {
     const key = purchasesKey(cfg.goldBuyer, wallet);
-    const cached = loadJson<{ from: string; to: string; items: SerializedPurchase[] }>(key);
+    const cached = loadJson<PurchaseCache>(key);
     const head = await pinnedBlock(pub);
     let items: Purchase[] = [];
     let scanFrom = fromBlock;
     let cacheFrom = fromBlock;
     if (cached && BigInt(cached.from) <= fromBlock && BigInt(cached.to) < head) {
-      items = cached.items.map((p) => ({
-        ...p,
-        amountIn: BigInt(p.amountIn),
-        out: BigInt(p.out),
-        priceUsdtPerXaut: BigInt(p.priceUsdtPerXaut),
-        blockNumber: BigInt(p.blockNumber),
-      }));
+      items = cached.items.map(revive);
       scanFrom = BigInt(cached.to) + 1n;
       cacheFrom = BigInt(cached.from);
     }
-    const fresh =
-      scanFrom <= head
-        ? await readPurchases(pub, { goldBuyer: cfg.goldBuyer, buyer: wallet, fromBlock: scanFrom, toBlock: head, blockRange: cfg.logBlockRange })
-        : [];
-    const all = [...items, ...fresh];
     const cacheTo = head > CACHE_MARGIN ? head - CACHE_MARGIN : 0n;
-    if (cacheTo >= scanFrom - 1n) {
-      saveJson(key, { from: cacheFrom.toString(), to: cacheTo.toString(), items: all.filter((p) => p.blockNumber <= cacheTo) });
+    const found: Purchase[] = [];
+    const save = (to: bigint) => {
+      const upTo = to < cacheTo ? to : cacheTo;
+      if (upTo < scanFrom - 1n) return;
+      try {
+        saveJson(key, { from: cacheFrom.toString(), to: upTo.toString(), items: [...items, ...found].filter((p) => p.blockNumber <= upTo) });
+      } catch {
+        /* storage full or blocked: the scan still returns its result */
+      }
+    };
+    if (scanFrom <= head) {
+      await readPurchases(pub, {
+        goldBuyer: cfg.goldBuyer,
+        buyer: wallet,
+        fromBlock: scanFrom,
+        toBlock: head,
+        blockRange: cfg.logBlockRange,
+        onBatch: (to, ps) => {
+          found.push(...ps);
+          save(to);
+        },
+      });
     }
-    return all;
+    return [...items, ...found];
+  }
+
+  /** One purchase scan at a time per page; getState waits for it briefly and shows partial history meanwhile. */
+  let scan: { wallet: string; done: Promise<void> } | null = null;
+  let scanResult: { wallet: string; purchases: Purchase[] } | null = null;
+  function startScan(wallet: Address, fromBlock: bigint): Promise<void> {
+    if (scan && scan.wallet === wallet.toLowerCase()) return scan.done;
+    const done = readWalletPurchases(wallet, fromBlock).then(
+      (purchases) => {
+        scanResult = { wallet: wallet.toLowerCase(), purchases };
+      },
+      () => {
+        /* the notice comes from getState; saved progress is kept */
+      },
+    );
+    const entry = { wallet: wallet.toLowerCase(), done };
+    scan = entry;
+    void done.finally(() => {
+      if (scan === entry) scan = null;
+    });
+    return done;
   }
 
   function loadPendings(): StoredPending[] {
@@ -390,63 +466,141 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
   }
   const confirming = new Set<string>();
 
+  /** POST /api/plans/:id/activate, retried with backoff while the answer is "try again" (activateVerdict) and time is left. */
+  async function activate(planId: string, session: SerializedSession, txHash: TxHash | undefined, budgetMs: number): Promise<void> {
+    const delays = backoffDelays(budgetMs);
+    for (let i = 0; ; i++) {
+      try {
+        await api(`/api/plans/${planId}/activate`, { method: "POST", body: { session, ...(txHash ? { grantTxHash: txHash } : {}) } });
+        return;
+      } catch (e) {
+        if (activateVerdict(e) === "retry" && i < delays.length) {
+          await sleep(delays[i]!);
+          continue;
+        }
+        throw e;
+      }
+    }
+  }
+
+  type Settled = { stray: { publicKey: `0x${string}`; reason: string } | null; started: boolean; waiting: CheckAgainError | null };
+  const grantNotVisible = (txHash?: TxHash) =>
+    new CheckAgainError(
+      "plan",
+      "Your passkey approved the agent's key, but Celo does not show it yet. Autumn will not ask you to approve or pay again: check again in a minute.",
+      txHash ? { txHash } : {},
+    );
+  const serverNotStarted = (txHash?: TxHash) =>
+    new CheckAgainError(
+      "plan",
+      "The agent's key is granted, but the Autumn server has not started the plan yet. Nothing more will be paid: check again in a minute.",
+      txHash ? { txHash } : {},
+    );
+
   /**
-   * Agent keys this browser asked to grant (saved before the passkey prompt),
-   * settled from the chain: granted ones are handed to the server; ones the
-   * server cannot take become a "stray key" the owner is asked to revoke; ones
-   * never granted are forgotten after a while. A live key is never forgotten.
+   * Agent keys this browser asked to grant (saved before the passkey prompt), settled from the chain: granted ones
+   * are handed to the server (with retries for `budgetMs`); a key is called stray only when a successful read proves
+   * it cannot run its plan (other limits onchain, or the server's definite answer); ones never granted are
+   * forgotten after the give-up window. A live key is never forgotten, and an unclear answer leaves it waiting.
    */
-  async function settlePendingGrants(wallet: Address): Promise<{ publicKey: `0x${string}`; reason: string } | null> {
-    let stray: { publicKey: `0x${string}`; reason: string } | null = null;
+  async function settlePendingGrants(wallet: Address, opts: { budgetMs?: number } = {}): Promise<Settled> {
+    const out: Settled = { stray: null, started: false, waiting: null };
     for (const p of loadPendings()) {
       if (p.wallet.toLowerCase() !== wallet.toLowerCase() || confirming.has(p.planId)) continue;
+      const inFlight = !!(p.txHash || p.sentAt);
       let s: SessionState;
       try {
         s = await readSessionState(pub, { wallet, publicKey: p.publicKey });
       } catch {
-        continue; // unknown: keep it, check again on the next refresh
+        // Unknown: keep it, check again on the next refresh.
+        if (inFlight) out.waiting ??= new CheckAgainError("plan", "Celo could not be read to check the agent's key. Nothing was sent again: check again in a minute.", p.txHash ? { txHash: p.txHash } : {});
+        continue;
       }
       if (s.status !== "active") {
         // Not on the account (never granted, or revoked) or expired: nothing live to look after.
-        if (s.onAccount || s.status === "expired" || Date.now() - p.createdAt > PENDING_GIVE_UP_MS) dropPending(p.planId);
+        if (s.onAccount || s.status === "expired" || Date.now() - (p.sentAt ?? p.createdAt) > PENDING_GIVE_UP_MS) dropPending(p.planId);
+        else if (inFlight) out.waiting ??= grantNotVisible(p.txHash);
         continue;
       }
-      // The key is live. It must be a plain session key with exactly the plan's limits, or it is revoked.
-      let mismatch: string | undefined;
+      // The key is live. It must be a plain session key with exactly the plan's limits (read just now), or it is stray.
       if (p.plan.amountPerBuy !== "0") {
+        let check: ReturnType<typeof checkGrantOnchain>;
         try {
           const grant = planToSessionGrant(
             { amountPerBuy: BigInt(p.plan.amountPerBuy), period: p.plan.period, dipBuy: p.plan.dipBuy, expiresAt: p.plan.expiresAt },
             cfg.goldBuyer,
             s.blockTimestamp,
           );
-          mismatch = sessionLimitsMismatch(s, grant, cfg.goldBuyer);
+          check = checkGrantOnchain(s, grant, cfg.goldBuyer);
         } catch (e) {
-          mismatch = errText(e);
+          check = { kind: "mismatch", reason: errText(e) };
         }
-      }
-      if (mismatch) {
-        stray = { publicKey: p.publicKey, reason: `its onchain limits are not the plan's: ${mismatch}` };
-        continue;
+        if (check.kind === "mismatch") {
+          out.stray = { publicKey: p.publicKey, reason: `its onchain limits are not the plan's: ${check.reason}` };
+          continue;
+        }
       }
       try {
-        await api(`/api/plans/${p.planId}/activate`, { method: "POST", body: { session: p.expected, ...(p.txHash ? { grantTxHash: p.txHash } : {}) } });
+        await activate(p.planId, p.expected, p.txHash, opts.budgetMs ?? 0);
         dropPending(p.planId);
         last.view = undefined;
+        out.started = true;
       } catch (e) {
-        if (e instanceof ApiError && e.status === 409 && /not visible|not active/.test(e.message)) continue; // the chain is catching up
-        if (e instanceof ApiError && e.status !== 503 && e.status < 500) {
-          stray = { publicKey: p.publicKey, reason: `the Autumn server could not start a plan with it (${e.message})` };
-        }
+        const verdict = activateVerdict(e);
+        if (verdict === "stray") out.stray = { publicKey: p.publicKey, reason: `the Autumn server cannot start a plan with it (${errText(e)})` };
+        else out.waiting ??= verdict === "retry" ? serverNotStarted(p.txHash) : new CheckAgainError("plan", `The Autumn server did not start the plan: ${errText(e)}.`, p.txHash ? { txHash: p.txHash } : {});
       }
     }
-    return stray;
+    return out;
   }
 
-  async function getState(): Promise<AutumnState> {
+  /** One read at a time: a call while one runs shares it (actions that need a newer read use freshState). */
+  let stateFlight: Promise<AutumnState> | null = null;
+  function getState(): Promise<AutumnState> {
+    return (stateFlight ??= readState().finally(() => {
+      stateFlight = null;
+    }));
+  }
+
+  /**
+   * With no wallet on this device the landing must show at once: its price and fee figures are read in the
+   * background (at most once per poll interval) and shown when they arrive.
+   */
+  let landingReadAt = 0;
+  let landingRead: Promise<void> | null = null;
+  function landingState(): AutumnState {
+    if (!landingRead && Date.now() - landingReadAt > POLL_MS - 1000) {
+      landingReadAt = Date.now();
+      landingRead = (async () => {
+        await Promise.allSettled([
+          readPoolState(pub).then((pool) => {
+            last.price = { usdtPerOunce: pool.midUsdtPerXaut, observedAt: new Date(pool.blockTimestamp * 1000), priceCheckAvailable: pool.twapAvailable };
+          }),
+          Promise.all([readCeloUsdtRate(pub), pub.getGasPrice()]).then(([rate, gasPrice]) => {
+            last.fees = { usdtPerCelo: celoToUsdtUnit(rate), relayFeeEstimate: estimateRelayFeeUsdt(gasPrice, rate), observedAt: new Date() };
+          }),
+          // What a new wallet's first plan would pay: no keys registered yet (the KeyStore has none for this placeholder address).
+          readRegistration(pub, "0x0000000000000000000000000000000000000001").then((r) => {
+            last.registration = { walletRegistered: false, nextGrantFeeCelo: r.nextGrantValue, perKeyFeeCelo: (r.feePerKey * REGISTRATION_VALUE_PERCENT) / 100n };
+          }),
+        ]);
+      })().finally(() => {
+        landingRead = null;
+        emit();
+      });
+    }
+    const notices = landingReadAt && !landingRead && !last.price ? ["The gold price could not be read from Celo right now."] : [];
+    return {
+      wallet: null, balances: null, registration: last.registration ?? null, price: last.price ?? null, plan: null, agent: { kind: "none" },
+      activity: [], identity: null, fees: last.fees ?? null, strayKey: null, notices,
+    };
+  }
+
+  async function readState(): Promise<AutumnState> {
     const notices: string[] = [];
     await reconcile();
     const w = storedWallet();
+    if (!w) return landingState();
 
     let price: GoldPrice | null = last.price ?? null;
     try {
@@ -475,17 +629,6 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
       /* fee figures in dollars are left out; the CELO amounts still show */
     }
 
-    if (!w) {
-      // What a new wallet's first plan would pay: no keys registered yet (the KeyStore has none for this placeholder address).
-      let registration: Registration | null = last.registration ?? null;
-      try {
-        const r = await readRegistration(pub, "0x0000000000000000000000000000000000000001");
-        registration = { walletRegistered: false, nextGrantFeeCelo: r.nextGrantValue, perKeyFeeCelo: (r.feePerKey * REGISTRATION_VALUE_PERCENT) / 100n };
-      } catch {
-        /* shown as "read when your wallet is open" */
-      }
-      return { wallet: null, balances: null, registration, price, plan: null, agent: { kind: "none" }, activity: [], identity: null, fees, strayKey: null, notices };
-    }
     const wallet: Wallet = { address: w.address, createdAt: new Date(w.createdAt), passkey: { discoverable: discoverableOf(w) } };
 
     if (serverMode === null) {
@@ -494,7 +637,7 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     if (serverMode && !serverMode.configured) notices.push("The Autumn server is not configured, so no agent runs for this app.");
     else if (serverMode && !serverMode.live) notices.push("The agent runs in dry-run mode on this server: it decides but sends no purchases.");
 
-    const strayKey = await settlePendingGrants(w.address);
+    const { stray: strayKey } = await settlePendingGrants(w.address);
 
     const [bal, reg, srv, ident] = await Promise.allSettled([
       readBalances(pub, w.address),
@@ -533,6 +676,7 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
       const cached = window.localStorage.getItem(agentIdKey(w.address));
       identity = last.identity = { registered: ident.value > 0n, ...(ident.value > 0n && cached ? { agentId: cached } : {}) };
     }
+    if (identity && !identity.registered && identityError) identity = { ...identity, lastError: identityError };
 
     let view = last.view ?? null;
     if (srv.status === "fulfilled") view = last.view = srv.value;
@@ -560,21 +704,36 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
       for (const p of view.plans) if (p !== planView) await loadTxFacts(p.grantTxHash, w.address);
     }
 
-    let purchases: Purchase[] = last.purchases ?? [];
+    // Purchase history: the server's run log (every purchase the agent made) first, the chain's GoldBuyer events to
+    // fill gaps and confirm. The scan runs in the background with saved progress; it is awaited only briefly.
     const granted = view.plans.filter((p) => p.status !== "pending_grant");
+    let chainPurchases: Purchase[] = scanResult?.wallet === w.address.toLowerCase() ? scanResult.purchases : cachedPurchases(w.address);
+    let scanComplete = scanResult?.wallet === w.address.toLowerCase();
     if (granted.length) {
       const fromBlock = granted.reduce<bigint>(
         (min, p) => (p.createdBlock !== null && BigInt(p.createdBlock) < min ? BigInt(p.createdBlock) : min),
         BigInt(granted[0]!.createdBlock ?? cfg.goldBuyerDeployBlock),
       );
-      try {
-        purchases = last.purchases = await readWalletPurchases(w.address, fromBlock > cfg.goldBuyerDeployBlock ? fromBlock : cfg.goldBuyerDeployBlock);
-      } catch {
+      const before = scanResult;
+      const done = startScan(w.address, fromBlock > cfg.goldBuyerDeployBlock ? fromBlock : cfg.goldBuyerDeployBlock);
+      const finished = await Promise.race([done.then(() => true), sleep(4000).then(() => false)]);
+      if (finished && scanResult !== before && scanResult?.wallet === w.address.toLowerCase()) {
+        chainPurchases = scanResult.purchases;
+        scanComplete = true;
+      } else if (finished) {
         notices.push("Purchases could not be read from Celo right now. The list may be incomplete.");
+        chainPurchases = scanResult?.wallet === w.address.toLowerCase() ? scanResult.purchases : cachedPurchases(w.address);
+      } else {
+        void done.then(emit); // show the full history when the scan ends
       }
-    }
+    } else scanComplete = true;
+    // The run log is complete when the server sent fewer entries than its page size (100).
+    const logComplete = srv.status === "fulfilled" && view.runLog.length < 100;
+    const purchases = mergePurchases(chainPurchases, runLogPurchases(view.runLog, w.address));
+    last.purchases = purchases;
+    const historyKnown = scanComplete || logComplete;
 
-    const agent = agentStatusFor({ plan: planView, chainStatus: session?.status ?? null, stopping, facts });
+    const agent = agentStatusFor({ plan: planView, chainStatus: session?.status ?? null, stopping: stopping && (!stopping.planId || stopping.planId === planView?.id) ? stopping : null, facts });
     if (stopping && agent.kind === "stopped") stopping = null;
 
     let plan: Plan | null = null;
@@ -610,15 +769,23 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
         period: planView.period,
         buyTheDip: planView.dipBuy,
         startedAt: new Date((planFacts?.timestamp ?? planView.createdAt) * 1000),
-        nextPurchaseAt: nextPurchaseFor(planView, purchases, nowSecs, agent),
+        nextPurchaseAt: historyKnown ? nextPurchaseFor(planView, purchases, nowSecs, agent) : null,
+        historyLoading: !historyKnown && agent.kind === "active",
         limits,
         ...(planView.grantTxHash ? { txHash: planView.grantTxHash as TxHash } : {}),
       };
     }
 
-    if (identity?.registered && !identity.agentId && granted.length) {
-      const agentId = await findAgentId(w.address, granted).catch(() => null);
-      if (agentId !== null) identity = last.identity = { registered: true, agentId };
+    if (identity?.registered && !identity.agentId && granted.length && !agentIdSearched) {
+      // In the background: the registry is not enumerable, so the id comes from its mint event.
+      void findAgentId(w.address, granted)
+        .then((id) => {
+          if (id !== null) {
+            last.identity = { registered: true, agentId: id };
+            emit();
+          }
+        })
+        .catch(() => undefined);
     }
 
     const activity = buildActivity([purchaseItems(purchases, view.plans), runLogItems(view.runLog), planItems(view.plans, facts)]);
@@ -631,10 +798,12 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     if (agentIdSearched) return null;
     agentIdSearched = true;
     const head = await pinnedBlock(pub);
-    for (const p of plans) {
-      if (p.createdBlock === null) continue;
-      const from = BigInt(p.createdBlock);
-      const to = from + AGENT_ID_SEARCH_BLOCKS < head ? from + AGENT_ID_SEARCH_BLOCKS : head;
+    // Right after each plan's grant first (where the old flow registered), then everything since the oldest plan
+    // (the identity can also be registered later from the "Register identity" button).
+    const starts = plans.map((p) => p.createdBlock).filter((b): b is string => b !== null).map(BigInt);
+    const ranges: [bigint, bigint][] = starts.map((from) => [from, from + AGENT_ID_SEARCH_BLOCKS < head ? from + AGENT_ID_SEARCH_BLOCKS : head]);
+    if (starts.length) ranges.push([starts.reduce((a, b) => (b < a ? b : a)), head]);
+    for (const [from, to] of ranges) {
       const id = await readAgentIdMinted(pub, wallet, from, to, cfg.logBlockRange);
       if (id !== null) {
         window.localStorage.setItem(agentIdKey(wallet), id.toString());
@@ -672,19 +841,69 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     }
   }
 
-  async function confirmPlan(input: PlanInput): Promise<Plan> {
+  /** Reads the state after an action: waits for a read already running (it may predate the action), then reads again. */
+  async function freshState(): Promise<AutumnState> {
+    await stateFlight?.catch(() => undefined);
+    return getState();
+  }
+
+  /** After a plan was started: the running plan, read back from the chain and the server. */
+  async function planAfterStart(): Promise<Plan> {
+    last.view = undefined;
+    emit();
+    const notYet = () => new CheckAgainError("plan", "The plan started, but it could not be read back yet. Check again in a few seconds.");
+    let state: AutumnState;
+    try {
+      state = await freshState();
+    } catch {
+      throw notYet();
+    }
+    if (!state.plan || state.agent.kind !== "active") throw notYet();
+    return state.plan;
+  }
+
+  let confirmFlight: Promise<Plan> | null = null;
+  function confirmPlan(input: PlanInput): Promise<Plan> {
+    return (confirmFlight ??= doConfirmPlan(input).finally(() => {
+      confirmFlight = null;
+    }));
+  }
+
+  async function doConfirmPlan(input: PlanInput): Promise<Plan> {
     assertPasskeyOrigin();
     if (goldBuyerHasCode === false) throw new Error("GoldBuyer is not deployed at the configured address, so no plan can start.");
-    const { wallet, signer } = admin();
+    const { wallet } = admin();
     const unit = 10n ** BigInt(DECIMALS.USDT);
     if (input.amount % unit !== 0n) throw new Error("Plans are whole USD₮ amounts.");
     const expiresAt = Math.floor(input.expiresAt.getTime() / 1000);
 
-    // 1. The server makes the session key and keeps its private half.
-    const created = await api<CreatePlanResponse>("/api/plans", {
-      method: "POST",
-      body: { wallet: wallet.address, amountUsdt: Number(input.amount / unit), period: input.period, dipBuy: input.buyTheDip, expiresAt },
-    });
+    // 0. A grant this browser already sent is settled first: a key the chain shows granted is started, never granted
+    //    (and paid for) a second time; one that may still land makes the owner wait instead.
+    const settled = await settlePendingGrants(wallet.address, { budgetMs: 30_000 });
+    if (settled.started) return planAfterStart();
+    if (settled.waiting) throw settled.waiting;
+
+    // 1. The server makes the session key and keeps its private half. A retry with the same choices gets the same
+    //    plan and key back; this browser has no grant in flight, so a different waiting plan may be replaced.
+    let created: CreatePlanResponse;
+    try {
+      created = await api<CreatePlanResponse>("/api/plans", {
+        method: "POST",
+        body: { wallet: wallet.address, amountUsdt: Number(input.amount / unit), period: input.period, dipBuy: input.buyTheDip, expiresAt, replacePending: true },
+      });
+    } catch (e) {
+      // A key for a waiting plan is granted onchain already (another tab or device): start that plan instead.
+      if (e instanceof ApiError && e.code === "pending_plan_granted" && typeof e.body?.planId === "string" && e.body.expected) {
+        try {
+          await activate(e.body.planId, e.body.expected as SerializedSession, undefined, 45_000);
+        } catch (err) {
+          if (activateVerdict(err) === "retry") throw serverNotStarted();
+          throw err;
+        }
+        return planAfterStart();
+      }
+      throw e;
+    }
 
     // 2. The limits granted are the ones computed here and shown on screen, not whatever the server says.
     const grant: SessionGrant = planToSessionGrant(
@@ -717,38 +936,47 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
 
   async function grantAndActivate(created: CreatePlanResponse, grant: SessionGrant, expected: SerializedSession, pending: StoredPending): Promise<Plan> {
     const { wallet, signer } = admin();
+    const key = { wallet: wallet.address, publicKey: created.sessionPublicKey };
+    // From the prompt on, the grant may be signed and sent even if this tab never hears back.
+    const sent: StoredPending = { ...pending, sentAt: Date.now() };
+    savePending(sent);
     // The passkey grants the session (and pays the KeyStore registration in CELO).
-    const result = await sdkClient().grantSession({
-      wallet,
-      signer,
-      sessionSigner: sessionSignerFromPublicKey(created.sessionPublicKey),
-      permissions: grant.permissions,
-      expiry: grant.expiry,
-      feeToken: USDT,
-      chainId: CELO_CHAIN_ID,
-      agentIdentity: false,
-    });
-    const txHash = result.transactionHash as TxHash | undefined;
-    if (!txHash) throw new Error("The grant returned no transaction. Autumn will check the chain for the agent's key on your next visit.");
-    savePending({ ...pending, txHash });
+    let txHash: TxHash | undefined;
+    try {
+      const result = await sdkClient().grantSession({
+        wallet,
+        signer,
+        sessionSigner: sessionSignerFromPublicKey(created.sessionPublicKey),
+        permissions: grant.permissions,
+        expiry: grant.expiry,
+        feeToken: USDT,
+        chainId: CELO_CHAIN_ID,
+        agentIdentity: false,
+      });
+      txHash = result.transactionHash as TxHash | undefined;
+      if (txHash) savePending({ ...sent, txHash });
+    } catch (e) {
+      const pk = passkeyFailure(e, "sign");
+      if (pk) {
+        // The prompt was closed: nothing was signed. A retry reuses this plan and key.
+        savePending(pending);
+        throw pk;
+      }
+      // Signed, and maybe sent (e.g. "Session grant did not confirm: pending" while the relay is slow): the chain decides.
+      const s = await waitForSession(key, (x) => x.status === "active", 20_000);
+      if (!s || s.status !== "active") throw grantNotVisible();
+    }
 
-    // 4. Before telling the server: the SDK granted what was shown, and the chain holds exactly that.
-    const granted = serializeSession(result);
-    const onchain = await waitForSession(
-      { wallet: wallet.address, publicKey: created.sessionPublicKey },
-      (s) => s.status === "active" && s.spend.length > 0,
-      60_000,
-    );
-    const mismatch = !sessionMatchesGrant(granted, expected)
-      ? "the wallet granted different permissions"
-      : !onchain
-        ? "Celo could not be read"
-        : sessionLimitsMismatch(onchain, grant, cfg.goldBuyer) ?? null;
-    if (mismatch) {
+    // 4. Before telling the server: the chain holds exactly the limits shown. Only a successful read that shows
+    //    other limits is a mismatch; "not visible yet" or "could not read" is waiting, never a reason to revoke.
+    const onchain = await waitForSession(key, (s) => s.status === "active" && s.spend.length > 0, 60_000);
+    const check = checkGrantOnchain(onchain, grant, cfg.goldBuyer);
+    if (check.kind === "unknown" || check.kind === "not_visible") throw grantNotVisible(txHash);
+    if (check.kind === "mismatch") {
       let revoked = false;
       try {
         await revokeKey(created.sessionPublicKey);
-        const s = await waitForSession({ wallet: wallet.address, publicKey: created.sessionPublicKey }, (x) => x.status !== "active", 60_000);
+        const s = await waitForSession(key, (x) => x.status !== "active", 60_000);
         revoked = !!s && s.status !== "active";
       } catch {
         /* reported below */
@@ -756,69 +984,174 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
       // Kept until the chain shows the key gone: Home then offers to revoke it.
       if (revoked) dropPending(created.planId);
       throw new Error(
-        `The plan was not started: ${mismatch}. ` +
-          (revoked ? "The agent's key was revoked." : "The agent's key may still be live: Autumn shows a button to revoke it."),
+        `The plan was not started: ${check.reason}. ` + (revoked ? "The agent's key was revoked." : "The agent's key may still be live: Autumn shows a button to revoke it."),
       );
     }
 
-    // 5. Only now does the server activate it (it checks the chain again itself).
-    for (let i = 0; ; i++) {
-      try {
-        await api(`/api/plans/${created.planId}/activate`, { method: "POST", body: { session: expected, grantTxHash: txHash } });
-        break;
-      } catch (e) {
-        if (i < 5 && e instanceof ApiError && e.status === 409 && /not visible|not active/.test(e.message)) {
-          await sleep(4000);
-          continue;
-        }
-        throw e;
+    // 5. Only now does the server activate it (it checks the chain again itself). Busy or unreachable: retried, then "check again".
+    try {
+      await activate(created.planId, expected, txHash, 60_000);
+    } catch (e) {
+      const verdict = activateVerdict(e);
+      if (verdict === "retry") throw serverNotStarted(txHash);
+      if (verdict === "stray") {
+        throw new Error(`The plan was not started: ${errText(e)}. The agent's key is live: Autumn shows a button to revoke it.`);
       }
+      throw e;
     }
     dropPending(created.planId);
 
-    // 6. ERC-8004: the SDK does not register a passkey wallet by itself. One more prompt, never fatal.
-    try {
-      if ((await readAgentIdentityCount(pub, wallet.address)) === 0n) {
-        const outcome = await sdkClient().registerAgentIdentity({ wallet, signer, feeToken: [USDT, NATIVE_TOKEN], chainId: CELO_CHAIN_ID });
-        if (outcome.status === "registered") window.localStorage.setItem(agentIdKey(wallet.address), outcome.agentId);
-      }
-    } catch {
-      /* registerAgentIdentity never throws; the read can. The identity shows as not registered. */
-    }
-
-    emit();
-    const state = await getState();
-    if (!state.plan) throw new Error("The plan started, but it could not be read back. Reload the page.");
-    return state.plan;
+    // 6. ERC-8004: the SDK does not register a passkey wallet by itself. One more prompt, never fatal: a failure is
+    //    shown in "Onchain proof" with a "Register identity" button.
+    await doRegisterIdentity().catch(() => undefined);
+    return planAfterStart();
   }
 
-  async function stopAgent(): Promise<{ txHash?: TxHash }> {
-    assertPasskeyOrigin();
-    const view = last.view ?? (await api<WalletView>(`/api/wallets/${admin().wallet.address}`));
-    const plan = currentPlan(view.plans);
-    if (!plan) throw new Error("There is no plan to stop.");
-    stopping = {};
-    emit();
-    let txHash: TxHash | undefined;
-    try {
-      txHash = await revokeKey(plan.sessionPublicKey);
-      stopping = txHash ? { txHash } : {};
-      emit();
-      const s = await waitForSession({ wallet: plan.walletAddress, publicKey: plan.sessionPublicKey }, (x) => x.status !== "active", 90_000);
-      if (!s || s.status === "active") {
-        throw new Error(
-          txHash
-            ? `The revoke was sent (${txHash}), but Celo does not show it yet. The agent may still be able to buy; check again in a minute.`
-            : "Celo does not show the revoke. The agent may still be able to buy.",
-        );
+  async function resumePlan(): Promise<Plan | null> {
+    if (confirmFlight) return confirmFlight;
+    const { wallet } = admin();
+    const settled = await settlePendingGrants(wallet.address, { budgetMs: 30_000 });
+    if (settled.started) return planAfterStart();
+    if (settled.waiting) throw settled.waiting;
+    const state = await freshState();
+    return state.plan && state.agent.kind === "active" ? state.plan : null;
+  }
+
+  /* ---------- ERC-8004 agent identity ---------- */
+
+  /** Why the last registration attempt in this page did not finish, in plain words; shown with the button. */
+  let identityError: string | undefined;
+  function identityFailureText(reason: string): string {
+    if (/notallowed|not allowed|timed out|cancel|abort|denied/i.test(reason)) {
+      return "The passkey prompt was closed or timed out, so the identity was not registered. Nothing was paid.";
+    }
+    if (/did not confirm/i.test(reason)) {
+      return "The registration was sent but has not confirmed yet. Wait a minute before registering again: Autumn checks the registry first.";
+    }
+    if (/deficit|insufficient|not enough|balance/i.test(reason)) {
+      return "The wallet does not hold enough USD₮ or CELO for the registration's network fee.";
+    }
+    return "The identity could not be registered right now (the relay did not accept it). Nothing was paid; try again later.";
+  }
+
+  let registerFlight: Promise<{ agentId: string | null; txHash?: TxHash }> | null = null;
+  function registerIdentity() {
+    return (registerFlight ??= (async () => {
+      try {
+        return await doRegisterIdentity();
+      } finally {
+        emit();
       }
+    })().finally(() => {
+      registerFlight = null;
+    }));
+  }
+
+  /**
+   * One `register` call in its own transaction, signed by the wallet's passkey with the same signer (and the same
+   * device-bound getFn) as every other admin action. The registry is read first (a wallet that owns an identity is
+   * never registered twice) and after (the chain is the proof).
+   */
+  async function doRegisterIdentity(): Promise<{ agentId: string | null; txHash?: TxHash }> {
+    assertPasskeyOrigin();
+    const { wallet, signer } = admin();
+    const count = async () => {
+      try {
+        return await readAgentIdentityCount(pub, wallet.address);
+      } catch {
+        return null;
+      }
+    };
+    const known = () => window.localStorage.getItem(agentIdKey(wallet.address));
+    const before = await count();
+    if (before === null) throw new Error((identityError = "Celo could not be read to check the agent's identity. Nothing was sent; try again."));
+    if (before > 0n) {
+      identityError = undefined;
+      last.identity = { registered: true, ...(known() ? { agentId: known()! } : {}) };
+      return { agentId: known() };
+    }
+    const outcome = await sdkClient().registerAgentIdentity({ wallet, signer, feeToken: [USDT, NATIVE_TOKEN], chainId: CELO_CHAIN_ID });
+    if (outcome.status === "registered") {
+      window.localStorage.setItem(agentIdKey(wallet.address), outcome.agentId);
+      identityError = undefined;
+      // Confirmed from the registry itself, a few reads at most (the public node can lag the relay by a block).
+      for (let i = 0; i < 5; i++) {
+        const n = await count();
+        if (n !== null && n > 0n) break;
+        await sleep(1500);
+      }
+      last.identity = { registered: true, agentId: outcome.agentId };
+      return { agentId: outcome.agentId, ...(outcome.transactionHash ? { txHash: outcome.transactionHash as TxHash } : {}) };
+    }
+    if (outcome.status === "skipped" && outcome.reason === "already-registered") {
+      identityError = undefined;
+      last.identity = { registered: true };
+      return { agentId: known() };
+    }
+    identityError = outcome.status === "skipped" ? "This network has no agent identity registry the wallet knows." : identityFailureText(outcome.reason);
+    throw new Error(identityError);
+  }
+
+  /* ---------- Stop ---------- */
+
+  let stopFlight: Promise<{ txHash?: TxHash }> | null = null;
+  function stopAgent(): Promise<{ txHash?: TxHash }> {
+    return (stopFlight ??= doStop().finally(() => {
+      stopFlight = null;
+    }));
+  }
+
+  const stopPending = (txHash?: TxHash) =>
+    new CheckAgainError(
+      "stop",
+      txHash
+        ? "The revoke was sent, but Celo does not show it yet. The agent may still be able to buy until it does. Check again in a minute: nothing will be sent twice."
+        : "Autumn could not tell whether the revoke was sent, and Celo does not show it yet. Check again in a minute.",
+      txHash ? { txHash } : {},
+    );
+
+  async function doStop(): Promise<{ txHash?: TxHash }> {
+    assertPasskeyOrigin();
+    // A revoke already sent is only ever checked, never sent again.
+    if (stopping?.publicKey) return checkStop();
+    stopping = { startedAt: Date.now() };
+    emit();
+    let plan: PlanView | null;
+    try {
+      const view = last.view ?? (await api<WalletView>(`/api/wallets/${admin().wallet.address}`));
+      plan = currentPlan(view.plans);
+      if (!plan) throw new Error("There is no plan to stop.");
     } catch (e) {
       stopping = null;
       emit();
       throw e;
     }
+    stopping = { ...stopping, planId: plan.id, publicKey: plan.sessionPublicKey, wallet: plan.walletAddress };
+    let txHash: TxHash | undefined;
     try {
-      await api(`/api/plans/${plan.id}/stop`, { method: "POST", body: txHash ? { revokeTxHash: txHash } : {} });
+      txHash = await revokeKey(plan.sessionPublicKey);
+    } catch (e) {
+      const pk = passkeyFailure(e, "sign");
+      if (pk) {
+        // The prompt was closed: nothing was signed or sent; stopping again is safe.
+        stopping = null;
+        emit();
+        throw pk;
+      }
+      // Signed, maybe sent: from here only the chain can say (checkStop allows a new revoke after 3 minutes without one).
+      emit();
+      throw stopPending();
+    }
+    if (txHash) stopping = { ...stopping, txHash };
+    emit();
+    const s = await waitForSession({ wallet: plan.walletAddress, publicKey: plan.sessionPublicKey }, (x) => x.status !== "active", 90_000);
+    if (!s || s.status === "active") throw stopPending(txHash);
+    return finishStop(plan.id, txHash);
+  }
+
+  async function finishStop(planId: string, txHash?: TxHash): Promise<{ txHash?: TxHash }> {
+    try {
+      await api(`/api/plans/${planId}/stop`, { method: "POST", body: txHash ? { revokeTxHash: txHash } : {} });
     } catch {
       /* The chain already stops the agent; the runner also closes the plan when it sees the revoke. */
     }
@@ -827,12 +1160,59 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     return txHash ? { txHash } : {};
   }
 
-  async function revokeStrayKey(): Promise<{ txHash?: TxHash }> {
+  async function checkStop(): Promise<{ txHash?: TxHash }> {
+    const st = stopping;
+    if (!st?.publicKey || !st.wallet || !st.planId) {
+      emit();
+      return {};
+    }
+    let s: SessionState;
+    try {
+      s = await readSessionState(pub, { wallet: st.wallet, publicKey: st.publicKey });
+    } catch {
+      throw new CheckAgainError("stop", "Celo could not be read right now. Check again in a minute: nothing will be sent twice.", st.txHash ? { txHash: st.txHash } : {});
+    }
+    if (s.status !== "active") return finishStop(st.planId, st.txHash);
+    // Still active. Stopping again is offered only when the chain proves the first revoke failed.
+    if (st.txHash) {
+      let receipt: Awaited<ReturnType<typeof pub.getTransactionReceipt>> | null = null;
+      try {
+        receipt = await pub.getTransactionReceipt({ hash: st.txHash });
+      } catch {
+        /* not mined yet, or not readable: still pending */
+      }
+      if (receipt && s.blockNumber >= receipt.blockNumber) {
+        stopping = null;
+        emit();
+        throw new Error("The revoke transaction did not revoke the agent's key, so the agent is still running. You can stop it again.");
+      }
+      throw stopPending(st.txHash);
+    }
+    if (Date.now() - st.startedAt > 3 * 60_000) {
+      stopping = null;
+      emit();
+      throw new Error("No revoke reached Celo, and the agent's key is still active. You can stop it again.");
+    }
+    throw stopPending();
+  }
+
+  let strayFlight: Promise<{ txHash?: TxHash }> | null = null;
+  let strayRevoke: { publicKey: string; at: number; txHash?: TxHash } | null = null;
+  function revokeStrayKey(): Promise<{ txHash?: TxHash }> {
+    return (strayFlight ??= doRevokeStrayKey().finally(() => {
+      strayFlight = null;
+    }));
+  }
+
+  async function doRevokeStrayKey(): Promise<{ txHash?: TxHash }> {
     assertPasskeyOrigin();
     const { wallet } = admin();
-    const stray = await settlePendingGrants(wallet.address);
+    const { stray } = await settlePendingGrants(wallet.address);
     if (!stray) throw new Error("There is no unused agent key to revoke.");
-    const txHash = await revokeKey(stray.publicKey);
+    // A revoke of this key sent in the last 10 minutes is waited for, never sent again.
+    const prior = strayRevoke && strayRevoke.publicKey === stray.publicKey.toLowerCase() && Date.now() - strayRevoke.at < 10 * 60_000 ? strayRevoke : null;
+    const txHash = prior ? prior.txHash : await revokeKey(stray.publicKey);
+    strayRevoke = { publicKey: stray.publicKey.toLowerCase(), at: prior?.at ?? Date.now(), ...(txHash ? { txHash } : {}) };
     const s = await waitForSession({ wallet: wallet.address, publicKey: stray.publicKey }, (x) => x.status !== "active", 90_000);
     if (!s || s.status === "active") throw new Error("Celo does not show the revoke yet. Check again in a minute.");
     for (const p of loadPendings()) if (p.publicKey.toLowerCase() === stray.publicKey.toLowerCase()) dropPending(p.planId);
@@ -861,57 +1241,115 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     };
   }
 
-  async function send(req: SendRequest): Promise<SendResult> {
+  let sendFlight: Promise<SendResult> | null = null;
+  function send(req: SendRequest): Promise<SendResult> {
+    return (sendFlight ??= doSend(req).finally(() => {
+      sendFlight = null;
+    }));
+  }
+
+  async function doSend(req: SendRequest): Promise<SendResult> {
     assertPasskeyOrigin();
     const { wallet, signer } = admin();
     const dest = checkDestination(req.to, { wallet: wallet.address, contracts: [cfg.goldBuyer] });
     if (!dest.ok) throw new Error(dest.problem);
     const call = buildSendCall(req.asset, dest.address, req.amount);
-    const r = await sdkClient().execute({ wallet, signer, calls: [call], feeToken: sendFeeTokens(req.asset), chainId: CELO_CHAIN_ID, agentIdentity: false });
-    if (r.status !== "CONFIRMED" || !r.transactionHash) {
-      throw new Error(
-        r.status === "FAILED"
-          ? "The transfer reverted onchain, so nothing was sent. Your funds are still in your wallet."
-          : "The relay has not confirmed the transfer yet. Check your balance on Celoscan before trying again.",
-      );
+    let r: Awaited<ReturnType<Client["execute"]>>;
+    try {
+      r = await sdkClient().execute({ wallet, signer, calls: [call], feeToken: sendFeeTokens(req.asset), chainId: CELO_CHAIN_ID, agentIdentity: false });
+    } catch (e) {
+      const pk = passkeyFailure(e, "sign");
+      if (pk) throw pk; // the prompt was closed: nothing was signed
+      // A refusal before sending (fees, simulation) is "not sent". A dropped connection may have happened after the
+      // relay accepted it: then only the balance can tell.
+      if (/timed? ?out|fetch failed|network|load failed|aborted/i.test(errText(e))) {
+        throw sendPending({}, "The connection to the relay dropped, so Autumn cannot tell whether the transfer was sent. Check your balance before sending again.");
+      }
+      throw e;
     }
-    const txHash = r.transactionHash as TxHash;
-    const receipt = await pub.waitForTransactionReceipt({ hash: txHash, timeout: 120_000 });
-    if (receipt.status !== "success") throw new Error("The transaction reverted onchain, so nothing was sent.");
-    // From here the transaction is onchain. A read that fails must never be reported as "not sent": the public
-    // node often cannot serve the newest block yet ("block is out of range"), so retry, then say what is known.
+    if (r.status === "FAILED") throw new Error("The transfer reverted onchain, so nothing was sent. Your funds are still in your wallet.");
+    const ref = { ...(r.transactionHash ? { txHash: r.transactionHash as TxHash } : {}), callsId: r.callsId };
+    if (r.status !== "CONFIRMED" || !r.transactionHash) throw sendPending(ref, "The relay accepted the transfer but has not confirmed it yet.");
+    return confirmSent(req, wallet.address, r.transactionHash as TxHash, 120_000);
+  }
+
+  /**
+   * From here the transaction exists. A read that fails must never be reported as "not sent": the public node often
+   * cannot serve the newest block yet ("block is out of range"), so reads are retried, then what is known is said.
+   */
+  async function confirmSent(req: SendRequest, wallet: Address, txHash: TxHash, receiptMs: number): Promise<SendResult> {
+    const pending = (what: string) => sendPending({ txHash }, what);
     const read = async <T,>(fn: () => Promise<T>): Promise<T> => {
-      let lastError: unknown;
       for (let i = 0; i < 12; i++) {
         try {
           return await fn();
-        } catch (e) {
-          lastError = e;
+        } catch {
           await sleep(1500);
         }
       }
-      throw new SendSubmittedError(txHash, lastError);
+      throw pending("The transfer was sent, but Celo's public node did not answer the balance check.");
     };
+    // The receipt, with the same patience: not found yet, or the node not answering, is "pending", never "not sent".
+    let receipt: Awaited<ReturnType<typeof pub.getTransactionReceipt>> | null = null;
+    for (const until = Date.now() + receiptMs; !receipt; ) {
+      try {
+        receipt = await pub.getTransactionReceipt({ hash: txHash });
+      } catch {
+        if (Date.now() > until) throw pending("The transfer was sent, but Celo does not show it yet.");
+        await sleep(2000);
+      }
+    }
+    if (receipt.status !== "success") throw new Error("The transaction reverted onchain, so nothing was sent. Your funds are still in your wallet.");
     // The relay's transaction can succeed while the intent inside it fails: check the balance actually moved.
     const [before, after] = await read(() =>
-      Promise.all([
-        readBalances(pub, wallet.address, receipt.blockNumber - 1n),
-        readBalances(pub, wallet.address, receipt.blockNumber),
-      ]),
+      Promise.all([readBalances(pub, wallet, receipt.blockNumber - 1n), readBalances(pub, wallet, receipt.blockNumber)]),
     );
     if (balanceOf(before, req.asset) - balanceOf(after, req.asset) < req.amount) {
-      throw new Error(`Celo shows the transaction (${txHash}) but not the transfer. Nothing may have been sent; check it on Celoscan.`);
+      throw pending("Celo shows the transaction but not the transfer in it. Check it on Celoscan.");
     }
-    let now = await read(() => readBalances(pub, wallet.address));
+    let now = await read(() => readBalances(pub, wallet));
     for (let i = 0; i < 10 && now.blockNumber < receipt.blockNumber; i++) {
       await sleep(1500);
-      now = await read(() => readBalances(pub, wallet.address));
+      now = await read(() => readBalances(pub, wallet));
     }
     const block = await pub.getBlock({ blockNumber: now.blockNumber }).catch(() => null);
     const balances: Balances = { usdt: now.usdt, gold: now.xaut0, celo: now.celo, observedAt: block ? new Date(Number(block.timestamp) * 1000) : new Date() };
     last.balances = balances;
     emit();
     return { txHash, balances };
+  }
+
+  /** The relay's status of a call bundle: its code (1xx pending, 2xx confirmed, ≥300 failed) and transaction. */
+  async function relayCallsStatus(callsId: string): Promise<{ code: number | null; txHash?: TxHash }> {
+    const res = await fetch(network.relayUrl ?? RELAY_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "wallet_getCallsStatus", params: [callsId] }),
+      cache: "no-store",
+    });
+    const data = (await res.json().catch(() => null)) as { result?: { status?: number | string; receipts?: { transactionHash?: string }[] } } | null;
+    const st = data?.result?.status;
+    const code = typeof st === "number" ? st : st === "CONFIRMED" ? 200 : st === "PENDING" ? 100 : null;
+    const tx = data?.result?.receipts?.find((x) => x.transactionHash)?.transactionHash;
+    return { code, ...(tx ? { txHash: tx as TxHash } : {}) };
+  }
+
+  async function checkSend(req: SendRequest, ref: { txHash?: TxHash; callsId?: string }): Promise<SendResult> {
+    const { wallet } = admin();
+    let txHash = ref.txHash;
+    if (!txHash && ref.callsId) {
+      let st: Awaited<ReturnType<typeof relayCallsStatus>>;
+      try {
+        st = await relayCallsStatus(ref.callsId);
+      } catch {
+        throw sendPending(ref, "The relay could not be reached to check the transfer.");
+      }
+      if (st.code !== null && st.code >= 300) throw new Error("The relay reports that the transfer failed, so nothing was sent. You can send again.");
+      if (!st.txHash) throw sendPending(ref, "The relay is still working on the transfer.");
+      txHash = st.txHash;
+    }
+    if (!txHash) throw sendPending({}, "Autumn has no transaction to check. Compare your balance with the amount before sending again.");
+    return confirmSent(req, wallet.address, txHash, 15_000);
   }
 
   return {
@@ -953,11 +1391,33 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     async restoreWallet() {
       assertPasskeyOrigin();
       if (!hasWebAuthn()) throw unsupportedPasskeys("find");
+      // The assertion is kept: it names the wallet (user handle) and the credential even when the SDK cannot finish.
+      let picked: { id: string; userHandle: Uint8Array | null } | null = null;
+      const get = browserGetFn();
+      const getFn = (async (o: CredentialRequestOptions) => {
+        const c = (await get(o)) as PublicKeyCredential | null;
+        if (c) {
+          const h = (c.response as AuthenticatorAssertionResponse).userHandle;
+          picked = { id: c.id, userHandle: h ? new Uint8Array(h) : null };
+        }
+        return c;
+      }) as NonNullable<PasskeyWebAuthnFns["getFn"]>;
       let w: Awaited<ReturnType<Client["recoverFromPasskey"]>>;
       try {
-        w = await sdkClient().recoverFromPasskey({ rpId: cfg.rpId, chainId: CELO_CHAIN_ID });
+        w = await sdkClient().recoverFromPasskey({ rpId: cfg.rpId, chainId: CELO_CHAIN_ID, webAuthn: { getFn } });
       } catch (e) {
-        throw passkeyFailure(e, "find") ?? e;
+        const pk = passkeyFailure(e, "find");
+        if (pk) throw pk;
+        const found = picked as { id: string; userHandle: Uint8Array | null } | null;
+        // The wallet has not made its first transaction, so the KeyStore holds no key yet: find it from the relay.
+        if (/no keys registered in KeyStore/i.test(errText(e)) && found?.userHandle?.length === 20) {
+          const { address, credential } = await restoreBeforeFirstTransaction(toHex(found.userHandle) as Address, found.id);
+          const wallet = await remember(address, credential, true);
+          emit();
+          return wallet;
+        }
+        if (/userHandle/i.test(errText(e))) throw new Error("This passkey was not made by Autumn, so it names no wallet. Choose your Autumn passkey, or restore with your backup code.");
+        throw new Error("Your wallet could not be found from this passkey right now. Try again in a minute, or restore with your backup code.");
       }
       // Found from the passkey alone, so it is discoverable.
       const wallet = await remember(w.address as Address, w.signer.credential, true);
@@ -992,10 +1452,14 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
       return wallet;
     },
     confirmPlan,
+    resumePlan,
     stopAgent,
+    checkStop,
+    registerIdentity,
     revokeStrayKey,
     quoteSend,
     send,
+    checkSend,
   };
 }
 

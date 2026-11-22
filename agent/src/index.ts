@@ -10,7 +10,7 @@ export {
   type PlanReport,
   type PlanDecision,
 } from "./runner.js";
-export { createPlan, confirmGrant, grantOf, expectedSessionOf, type CreatePlanInput } from "./plans.js";
+export { createPlan, confirmGrant, GrantCheckError, grantOf, expectedSessionOf, type CreatePlanInput } from "./plans.js";
 export { createChainReader, createAltanaExecutor } from "./adapters.js";
 export { createProductionRunner, createProductionService, createExecutor, serverConfigFromEnv, submitterFromEnv, tickOnce, type Submitter } from "./production.js";
 export { inProcessSendLock, pgSendLock, sendLockKey, SendLockError, type SendLock } from "./sendLock.js";

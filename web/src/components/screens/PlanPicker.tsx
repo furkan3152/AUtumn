@@ -1,8 +1,9 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { estimateBuyCost } from "@autumn/core";
 import {
+  CheckAgainError,
   DECIMALS,
   DIP_RULE_TEXT,
   LIMITS_TEXT,
@@ -52,16 +53,53 @@ export function PlanPicker({
   const cost = fees ? estimateBuyCost(each, fees.relayFeeEstimate) : null;
   const fullPlan = suggestedDeposit(each, period);
 
+  const waiting = error instanceof CheckAgainError;
+  const [note, setNote] = useState<string | null>(null);
+  // Leave as soon as the state shows the plan running (also when it was started by "Check again" or another tab).
+  const left = useRef(false);
+  useEffect(() => {
+    if (!left.current && state.agent.kind === "active" && state.plan) {
+      left.current = true;
+      onDone();
+    }
+  }, [state.agent.kind, state.plan, onDone]);
+
   const confirm = async () => {
+    if (busy) return;
     setBusy(true);
     setError(null);
+    setNote(null);
     try {
       await client.confirmPlan({ amount: each, period, buyTheDip: dip, expiresAt: limits.expiresAt });
-      onDone();
+      if (!left.current) {
+        left.current = true;
+        onDone();
+      }
     } catch (e) {
       setError(e);
       setBusy(false);
     }
+  };
+
+  /** Reads the chain and starts a granted plan; never grants or pays again. */
+  const checkAgain = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const plan = await client.resumePlan();
+      if (plan) {
+        if (!left.current) {
+          left.current = true;
+          onDone();
+        }
+        return;
+      }
+      setError(null);
+      setNote("No grant from this browser is waiting on Celo, so nothing was paid. You can confirm again.");
+    } catch (e) {
+      setError(e);
+    }
+    setBusy(false);
   };
 
   return (
@@ -154,7 +192,7 @@ export function PlanPicker({
             <dt>
               <Label icon="lock">Stop</Label>
             </dt>
-            <dd>Any time, with a passkey approval and a small network fee</dd>
+            <dd>Any time, with a passkey approval and a small network fee.</dd>
           </div>
         </dl>
       </Panel>
@@ -217,24 +255,30 @@ export function PlanPicker({
           ) : (
             `is less than one ${daily ? "daily" : "weekly"} buy. Add money before the first purchase.`
           )}
-          {" "}Confirming asks for your passkey twice: once for the limits, once for the agent&apos;s identity (ERC-8004).
+          {" "}Confirming asks for your passkey twice: once for the limits, once for the agent&apos;s identity (ERC-8004). The first buy
+          happens at the agent&apos;s next run; later buys are at least <span className="num">{daily ? "12 hours" : "3 days"}</span> apart.
         </p>
       </Panel>
       </div>
 
       <div className="plan__act">
-      <Button block onClick={confirm} disabled={busy}>
-        {busy ? (
+      <Button block onClick={confirm} disabled={busy || waiting}>
+        {busy && !waiting ? (
           <>
             <Spinner /> Confirm with your passkey…
           </>
         ) : (
           <>
-            Confirm: <span className="num">${amount}</span> of gold a {per}
+            Confirm: <span className="num">{usdt(each)} USD₮</span> of gold a {per}
           </>
         )}
       </Button>
-      <FailureNotice error={error} onRetry={confirm} />
+      <FailureNotice error={error} onRetry={confirm} onCheckAgain={busy ? undefined : checkAgain} />
+      {note && (
+        <p className="muted small" role="status">
+          {note}
+        </p>
+      )}
       </div>
     </div>
   );

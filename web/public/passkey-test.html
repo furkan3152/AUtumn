@@ -20,7 +20,15 @@
 <script>
 const out = document.getElementById("out"), env = document.getElementById("env");
 const lines = [];
-function log(s, cls) { lines.push(s); out.textContent = lines.join("\n"); }
+function log(s, cls) {
+  lines.push([s, cls]);
+  out.replaceChildren(...lines.flatMap(([text, c], i) => {
+    const span = document.createElement("span");
+    span.className = c;
+    span.textContent = text;
+    return i ? ["\n", span] : [span];
+  }));
+}
 const rand = (n) => crypto.getRandomValues(new Uint8Array(n));
 const base = (extra) => ({
   publicKey: Object.assign({
@@ -37,7 +45,7 @@ const tests = [
   ["3. Same as 2, verification preferred", () => base({ authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "discouraged", requireResidentKey: false, userVerification: "preferred" } })],
   ["4. Same as 2, with the credProps extension", () => base({ authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "discouraged", requireResidentKey: false, userVerification: "required" }, extensions: { credProps: true } })],
   ["5. Saved passkey preferred", () => base({ authenticatorSelection: { residentKey: "preferred", requireResidentKey: false, userVerification: "required" }, extensions: { credProps: true } })],
-  ["6. Saved passkey required (platform)", () => base({ authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "required", requireResidentKey: true, userVerification: "required" } })],
+  ["6. Saved passkey required (platform)", () => base({ authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "required", requireResidentKey: true, userVerification: "required" }, extensions: { credProps: true } })],
   ["7. Same as 2, also accepting RS256", () => { const o = base({ authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "discouraged", requireResidentKey: false, userVerification: "required" } }); o.publicKey.pubKeyCredParams.push({ type: "public-key", alg: -257 }); return o; }],
   ["8. The request the app sends for this phone's screen lock", () => appLike()],
   ["9. Same as 8, sent four seconds after the tap", async () => { await new Promise((r) => setTimeout(r, 4000)); return appLike(); }],
@@ -64,9 +72,9 @@ tests.forEach(([name, make]) => {
       const c = await navigator.credentials.create(await make());
       const ext = c.getClientExtensionResults ? c.getClientExtensionResults() : {};
       const tr = c.response.getTransports ? c.response.getTransports() : [];
-      log("OK   " + name + " | attachment=" + c.authenticatorAttachment + " transports=" + tr.join(",") + " rk=" + JSON.stringify(ext.credProps || null) + " (" + (Date.now() - t0) + " ms)");
+      log("OK   " + name + " | attachment=" + c.authenticatorAttachment + " transports=" + tr.join(",") + " rk=" + JSON.stringify(ext.credProps || null) + " (" + (Date.now() - t0) + " ms)", "ok");
     } catch (e) {
-      log("FAIL " + name + " | " + e.name + ": " + e.message + " (" + (Date.now() - t0) + " ms)");
+      log("FAIL " + name + " | " + e.name + ": " + e.message + " (" + (Date.now() - t0) + " ms)", "bad");
     }
   };
   box.appendChild(b);

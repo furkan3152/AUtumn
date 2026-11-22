@@ -1,5 +1,5 @@
 import { createExecutor, createProductionService, cronAuthorized, parseProbeRequest, runAdminProbe, serverConfigFromEnv } from "@autumn/agent";
-import { handle, json, readBody, withPool } from "@/server/autumn";
+import { handle, json, readBody, withPool, notAllowed } from "@/server/autumn";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,3 +35,9 @@ export async function POST(req: Request) {
     });
   });
 }
+
+const refuse = notAllowed("POST");
+export const GET = refuse;
+export const PUT = refuse;
+export const PATCH = refuse;
+export const DELETE = refuse;

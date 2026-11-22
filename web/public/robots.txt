@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /passkey-test.html

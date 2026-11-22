@@ -14,6 +14,7 @@ vi.mock("@/server/autumn", async () => {
     new Response(JSON.stringify(body, (_k, x) => (typeof x === "bigint" ? x.toString() : x)), { status, headers: { "content-type": "application/json" } });
   return {
     json,
+    notAllowed: (...allow: string[]) => () => json({ error: `this endpoint accepts ${allow.join(", ")} only` }, 405),
     async handle(fn: () => Promise<unknown>) {
       try {
         return json(await fn());

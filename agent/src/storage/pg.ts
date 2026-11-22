@@ -238,6 +238,16 @@ export class PgStorage implements Storage {
     return Number(r.rows[0]!.n);
   }
 
+  async deletePendingPlan(planId: string): Promise<boolean> {
+    const r = await this.pool.query(
+      `DELETE FROM plans p WHERE p.id = $1 AND p.status = 'pending_grant'
+         AND NOT EXISTS (SELECT 1 FROM purchase_attempts a WHERE a.plan_id = p.id)
+         AND NOT EXISTS (SELECT 1 FROM run_log l WHERE l.plan_id = p.id)`,
+      [planId],
+    );
+    return (r.rowCount ?? 0) > 0;
+  }
+
   async deletePendingPlansBefore(walletAddress: Address, before: number): Promise<number> {
     // session_keys rows go with their plan (ON DELETE CASCADE). A pending plan has no attempts or run log.
     const r = await this.pool.query(

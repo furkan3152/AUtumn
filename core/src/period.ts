@@ -81,6 +81,49 @@ export function nextDueTime(
   return dueTimeInPeriod(nextPeriodStart(now, period), period, dayOfWeek, hourUtc);
 }
 
+/**
+ * The least time between two scheduled purchases of one plan. A purchase that
+ * caught up late in a period (23:50 UTC for a daily plan due at 01:00) must
+ * not be followed by the next period's purchase minutes later. Shorter than
+ * the period, so a period is never skipped because of it: its due time moves
+ * later inside the period at most.
+ */
+export const MIN_PURCHASE_SPACING_SECS: Record<PlanPeriod, number> = { day: 12 * 3600, week: 3 * DAY_SECS };
+
+export type PurchaseHistory = {
+  /**
+   * The newest purchase of this plan (at or after its creation), unix
+   * seconds; null when the plan has not bought yet. 0 when the plan has bought
+   * but longer ago than the spacing reaches (no constraint).
+   */
+  lastPurchaseAt: number | null;
+  /** Whether the plan's scheduled purchase of the period containing `now` happened. */
+  boughtThisPeriod: boolean;
+};
+
+/**
+ * When the plan's next scheduled purchase is due: the one rule the runner
+ * decides by and the app shows.
+ *
+ * - The first purchase of a new plan is due at its creation, whatever the
+ *   period boundary (a daily plan created at 23:05 UTC does not wait a day).
+ * - After that: the period's due time (`dayOfWeek`, `hourUtc`), the next
+ *   period's once this one has bought, and never earlier than
+ *   MIN_PURCHASE_SPACING_SECS after the previous purchase.
+ *
+ * May be in the past: the purchase is due now.
+ */
+export function nextScheduledPurchase(
+  plan: { period: PlanPeriod; dayOfWeek: number; hourUtc: number; createdAt: number },
+  now: number,
+  history: PurchaseHistory,
+): number {
+  if (history.lastPurchaseAt === null) return plan.createdAt;
+  const due = nextDueTime(now, plan.period, plan.dayOfWeek, plan.hourUtc, history.boughtThisPeriod);
+  const spaced = history.lastPurchaseAt + MIN_PURCHASE_SPACING_SECS[plan.period];
+  return due > spaced ? due : spaced;
+}
+
 /** Plans run for 12 weeks; the session expires then. */
 export const PLAN_DURATION_WEEKS = 12;
 export const PLAN_DURATION_SECS = PLAN_DURATION_WEEKS * WEEK_SECS;

@@ -33,20 +33,30 @@ import {
   utcHour,
   type PlanPeriod,
 } from "@autumn/core";
-import { confirmGrant, createPlan, grantOf } from "./plans.js";
+import { GrantCheckError, confirmGrant, createPlan, grantOf } from "./plans.js";
 import type { ChainReader } from "./ports.js";
 import type { Storage } from "./storage/types.js";
 import type { PlanRecord, RunLogEntry } from "./types.js";
 
+/**
+ * An answer with an HTTP status. `code` is a stable machine-readable reason the
+ * app branches on (the message is for people and may change); `extra` is sent
+ * with it in the JSON body.
+ */
 export class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly code?: string,
+    readonly extra?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "HttpError";
   }
 }
+
+/** Celo could not be read (RPC or transport failure): the client should try again; nothing was decided. */
+const chainUnavailable = (what: string) => new HttpError(503, `Celo could not be read ${what}; try again in a few seconds`, "chain_unavailable");
 
 export type ServiceDeps = {
   storage: Storage;
@@ -113,7 +123,12 @@ function obj(body: unknown): Record<string, unknown> {
 
 function walletOf(v: unknown): Address {
   if (typeof v !== "string" || !isAddress(v, { strict: false })) throw new HttpError(400, "wallet must be a 20-byte hex address");
-  return getAddress(v);
+  // All-lowercase or all-uppercase hex carries no checksum; mixed case must be a correct EIP-55 checksum (a typo otherwise).
+  const body = v.slice(2);
+  if (body !== body.toLowerCase() && body !== body.toUpperCase() && !isAddress(v, { strict: true })) {
+    throw new HttpError(400, "wallet has a mixed-case address with a wrong checksum");
+  }
+  return getAddress(v.toLowerCase());
 }
 
 function txHashOf(v: unknown, name: string): Hex {
@@ -159,6 +174,42 @@ export async function createPlanRequest(deps: ServiceDeps, body: unknown, client
     throw new HttpError(400, "expiresAt must be 12 weeks from now; reload the plan screen and try again");
   }
   await deps.storage.deletePendingPlansBefore(wallet, now - PENDING_PLAN_RETENTION_SECS);
+  const amountPerBuy = BigInt(amount) * USDT_UNIT;
+  const dipBuy = b.dipBuy === true;
+
+  // A wallet has at most one young plan waiting for its grant. A retry with the same choices gets the same plan and
+  // key back (nothing is counted up); different choices replace it, but only when the client says so and the chain
+  // shows its key was never granted. A key that is granted onchain means the passkey already paid for it: that plan
+  // must be started, never replaced by a second grant.
+  const young = (await deps.storage.listPlansForWallet(wallet)).filter(
+    (p) => p.status === "pending_grant" && p.createdAt >= now - PENDING_PLAN_TTL_SECS,
+  );
+  const replace: PlanRecord[] = [];
+  for (const p of young) {
+    let st;
+    try {
+      st = await deps.chain.sessionState(p.walletAddress, p.sessionPublicKey);
+    } catch {
+      throw chainUnavailable("to check this wallet's plan that is waiting to start");
+    }
+    if (st.onAccount || st.status === "active") {
+      throw new HttpError(409, "this wallet already granted the agent key of a plan that is waiting to start; start that plan instead", "pending_plan_granted", {
+        planId: p.id,
+        sessionPublicKey: p.sessionPublicKey,
+        expected: createPlanResponse(p, sessionGrantOf(deps, p, now)).expected,
+      });
+    }
+    if (p.amountPerBuy === amountPerBuy && p.period === period && p.dipBuy === dipBuy && p.expiresAt === expiresAt) {
+      return createPlanResponse(p, sessionGrantOf(deps, p, now));
+    }
+    replace.push(p);
+  }
+  if (replace.length) {
+    if (b.replacePending !== true) {
+      throw new HttpError(409, "this wallet has a plan waiting for its passkey approval; finish or replace it", "pending_plan_exists", { planId: replace[0]!.id });
+    }
+    for (const p of replace) await deps.storage.deletePendingPlan(p.id);
+  }
   if ((await deps.storage.countPendingPlans(wallet, now - PENDING_PLAN_TTL_SECS)) >= (deps.maxPendingPerWallet ?? 3)) {
     throw new HttpError(429, "too many unconfirmed plans for this wallet; try again in a few minutes");
   }
@@ -166,23 +217,36 @@ export async function createPlanRequest(deps: ServiceDeps, body: unknown, client
     throw new HttpError(409, "this wallet has reached the number of plans the server keeps");
   }
 
-  // Due at the hour of creation: the first purchase can happen right away,
-  // later ones on the same weekday (weekly) or at the same hour (daily), UTC.
-  const { plan, sessionPublicKey, grant } = await createPlan(
+  // The first purchase is due at once (nextScheduledPurchase); dayOfWeek and hourUtc anchor the later ones:
+  // the same weekday (weekly) or hour (daily) as the plan's creation, UTC.
+  const { plan, grant } = await createPlan(
     { storage: deps.storage, encryptionKey: deps.encryptionKey, goldBuyer: deps.goldBuyer, now },
     {
       walletAddress: wallet,
-      amountPerBuy: BigInt(amount) * USDT_UNIT,
+      amountPerBuy,
       period,
       expiresAt,
       dayOfWeek: period === "week" ? utcDayOfWeek(now) : 0,
       hourUtc: utcHour(now),
-      dipBuy: b.dipBuy === true,
+      dipBuy,
       createdBlock: head.number,
     },
   );
+  return createPlanResponse(plan, grant);
+}
+
+function sessionGrantOf(deps: Pick<ServiceDeps, "goldBuyer">, plan: PlanRecord, now: number) {
+  try {
+    return grantOf(plan, deps.goldBuyer, now);
+  } catch (e) {
+    throw new HttpError(400, (e as Error).message);
+  }
+}
+
+function createPlanResponse(plan: PlanRecord, grant: ReturnType<typeof grantOf>): CreatePlanResponse {
+  const sessionPublicKey = plan.sessionPublicKey;
   const expected = {
-    walletAddress: wallet,
+    walletAddress: plan.walletAddress,
     publicKey: sessionPublicKey,
     permissions: {
       calls: grant.permissions.calls.map((c) => ({ ...c })),
@@ -223,23 +287,33 @@ export async function activatePlanRequest(deps: ServiceDeps, planId: string, bod
   const reported = parseReportedSession(b.session);
   const grantTxHash = b.grantTxHash === undefined || b.grantTxHash === null ? undefined : txHashOf(b.grantTxHash, "grantTxHash");
   const plan = await deps.storage.getPlan(planId);
-  if (!plan) throw new HttpError(404, "no such plan");
+  if (!plan) throw new HttpError(404, "no such plan", "no_such_plan");
   if (plan.status === "active") return planView(plan, deps.goldBuyer);
-  if (plan.status !== "pending_grant") throw new HttpError(409, "this plan was stopped");
+  if (plan.status !== "pending_grant") throw new HttpError(409, "this plan was stopped", "plan_stopped");
   if (getAddress(reported.walletAddress) !== plan.walletAddress) throw new HttpError(403, "the session is for another wallet");
 
   if (grantTxHash) {
-    const facts = await deps.chain.txFacts(grantTxHash, plan.walletAddress);
-    if (!facts) throw new HttpError(409, "the grant transaction is not visible onchain yet; try again in a few seconds");
-    if (!facts.succeeded) throw new HttpError(409, "the grant transaction reverted");
+    let facts;
+    try {
+      facts = await deps.chain.txFacts(grantTxHash, plan.walletAddress);
+    } catch {
+      throw chainUnavailable("to check the grant transaction");
+    }
+    if (!facts) throw new HttpError(409, "the grant transaction is not visible onchain yet; try again in a few seconds", "not_visible");
+    if (!facts.succeeded) throw new HttpError(409, "the grant transaction reverted", "grant_reverted");
   }
 
   // One running plan per wallet. An older plan whose session is no longer
   // active onchain is closed here; one that is still active blocks activation.
   for (const other of await deps.storage.listPlansForWallet(plan.walletAddress)) {
     if (other.id === plan.id || other.status !== "active") continue;
-    const st = await deps.chain.sessionState(other.walletAddress, other.sessionPublicKey);
-    if (st.status === "active") throw new HttpError(409, "another plan is still active for this wallet; stop it first");
+    let st;
+    try {
+      st = await deps.chain.sessionState(other.walletAddress, other.sessionPublicKey);
+    } catch {
+      throw chainUnavailable("to check the wallet's other plan");
+    }
+    if (st.status === "active") throw new HttpError(409, "another plan is still active for this wallet; stop it first", "other_plan_active");
     await deps.storage.stopPlan(other.id, st.status === "expired" ? "the session has expired" : "the owner revoked the session", st.blockTimestamp);
   }
 
@@ -247,7 +321,16 @@ export async function activatePlanRequest(deps: ServiceDeps, planId: string, bod
     return planView(await confirmGrant({ storage: deps.storage, chain: deps.chain, goldBuyer: deps.goldBuyer }, planId, reported, grantTxHash), deps.goldBuyer);
   } catch (err) {
     if (err instanceof HttpError) throw err;
-    throw new HttpError(409, (err as Error).message);
+    if (err instanceof GrantCheckError) {
+      // Only a successful chain read that shows other limits is a mismatch; a key not on the account yet is not.
+      if (err.kind === "mismatch") throw new HttpError(409, err.message, "limits_mismatch");
+      if (err.kind === "not_visible") throw new HttpError(409, err.message, "not_visible");
+      if (err.kind === "expired") throw new HttpError(409, err.message, "session_expired");
+      if (err.kind === "report") throw new HttpError(409, err.message, "session_mismatch");
+      throw new HttpError(409, err.message, "plan_stopped");
+    }
+    // Anything else is a failed read (RPC, transport): not an answer about the key.
+    throw chainUnavailable("to check the agent's key");
   }
 }
 
@@ -345,8 +428,10 @@ export async function walletViewRequest(deps: Pick<ServiceDeps, "storage" | "gol
   );
   return {
     plans: plans.map((p) => planView(p, deps.goldBuyer)),
-    runLog: runLog.map(({ amountIn, out, ...e }) => ({
+    // Reasons are the agent's own sentences; a relay's error text can be long or carry request details: first line only.
+    runLog: runLog.map(({ amountIn, out, reason, ...e }) => ({
       ...e,
+      reason: (reason.split("\n")[0] ?? "").slice(0, 200),
       ...(amountIn !== undefined ? { amountIn: amountIn.toString() } : {}),
       ...(out !== undefined ? { out: out.toString() } : {}),
     })),

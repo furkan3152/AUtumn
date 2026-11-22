@@ -110,3 +110,25 @@ describe.skipIf(!url)("pgSendLock (Postgres)", () => {
     }
   });
 });
+
+describe("pgSendLock pool use", () => {
+  it("holds at most one pooled connection per EOA in a process, however many sends wait", async () => {
+    let held = 0;
+    let maxHeld = 0;
+    const fakePool = {
+      async connect() {
+        held++;
+        maxHeld = Math.max(maxHeld, held);
+        return {
+          query: async () => ({ rows: [] }),
+          release: () => {
+            held--;
+          },
+        };
+      },
+    } as unknown as pg.Pool;
+    const r = await overlap([pgSendLock(fakePool)], 6);
+    expect(r.max).toBe(1);
+    expect(maxHeld).toBe(1);
+  });
+});

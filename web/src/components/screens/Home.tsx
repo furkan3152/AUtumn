@@ -175,7 +175,7 @@ export function Home({
         ) : (
           <>
             <p className="keynum keynum--empty">No gold yet.</p>
-            {plan.nextPurchaseAt && agent.kind === "active" ? (
+            {plan.nextPurchaseAt && !plan.historyLoading && agent.kind === "active" ? (
               <p>
                 The first purchase is <span className="num">{formatDateTime(plan.nextPurchaseAt)}</span>.
               </p>
@@ -214,7 +214,7 @@ export function Home({
             </dd>
           </div>
         </dl>
-        {isDeviceBound(state.wallet) && <BackupChip onBackupCode={onBackupCode} />}
+        <BackupChip onBackupCode={onBackupCode} deviceBound={isDeviceBound(state.wallet)} />
         <p className="muted small">You can send your funds out at any time, whether the agent is running or stopped.</p>
         <div className="row row--split">
           <Button variant="plain" onClick={onAddMoney}>
@@ -226,42 +226,59 @@ export function Home({
         </div>
       </Panel>
 
-      <OnchainProof state={state} />
+      <OnchainProof client={client} state={state} />
       </div>
 
       <div className="home__col home__col--b">
       <Panel title={running ? `This ${periodWord}'s limit` : "Limits of the last plan"} icon="pouch" className="home__limit">
         {!running && <p className="muted">No longer in force. The agent cannot spend anything.</p>}
-        <p className="keynum-label">Left</p>
-        <p className="keynum num">{lim.spent !== null ? `${usdt(left)} USD₮` : "Unknown"}</p>
-        <div
-          className="meter"
-          role="meter"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(limitUsed * 100)}
-          aria-label={`${daily ? "Daily" : "Weekly"} limit used`}
-        >
-          <span style={{ width: `${Math.min(100, limitUsed * 100)}%` }} />
-        </div>
+        {running ? (
+          <>
+            <p className="keynum-label">Left</p>
+            <p className="keynum num">{lim.spent !== null ? `${usdt(left)} USD₮` : "Unknown"}</p>
+            <div
+              className="meter"
+              role="meter"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(limitUsed * 100)}
+              aria-label={`${daily ? "Daily" : "Weekly"} limit used`}
+            >
+              <span style={{ width: `${Math.min(100, limitUsed * 100)}%` }} />
+            </div>
+          </>
+        ) : null}
         <dl className="facts">
-          <div>
-            <dt>
-              <Label icon="coin">Used</Label>
-            </dt>
-            <dd className="num">
-              {lim.spent !== null ? usdt(lim.spent) : "Unknown"} of {usdt(lim.cap)} USD₮
-            </dd>
-          </div>
-          <div>
-            <dt>
-              <Label icon="calendar">Resets</Label>
-            </dt>
-            <dd>
-              {daily ? "Every day" : "Monday"} <span className="num">00:00</span> UTC (
-              <span className="num">{formatDateTime(lim.resetsAt)}</span> your time)
-            </dd>
-          </div>
+          {running ? (
+            <>
+              <div>
+                <dt>
+                  <Label icon="coin">Used</Label>
+                </dt>
+                <dd className="num">
+                  {lim.spent !== null ? usdt(lim.spent) : "Unknown"} of {usdt(lim.cap)} USD₮
+                </dd>
+              </div>
+              <div>
+                <dt>
+                  <Label icon="calendar">Resets</Label>
+                </dt>
+                <dd>
+                  {daily ? "Every day" : "Monday"} <span className="num">00:00</span> UTC (
+                  <span className="num">{formatDateTime(lim.resetsAt)}</span> your time)
+                </dd>
+              </div>
+            </>
+          ) : (
+            <div>
+              <dt>
+                <Label icon="pouch">Granted</Label>
+              </dt>
+              <dd className="num">
+                {usdt(lim.cap)} USD₮ per {daily ? "day" : "week"}, fees included
+              </dd>
+            </div>
+          )}
           <div>
             <dt>
               <Label icon="shield">Allowed</Label>
@@ -316,23 +333,31 @@ function useBump(key: string | undefined) {
 
 function StatusAndStop({ client, state, now }: { client: AutumnClient; state: AutumnState; now: number }) {
   const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const stopping = state.agent.kind === "stopping";
   const plan = state.plan!;
   const next = plan.nextPurchaseAt;
-  const due = next !== null && next.getTime() <= now;
+  const due = next !== null && !plan.historyLoading && next.getTime() <= now;
   const per = plan.period === "day" ? "day" : "week";
   const priceCheckDown = state.price?.priceCheckAvailable === false;
 
-  const stop = async () => {
+  const run = async (fn: () => Promise<unknown>) => {
+    if (busy) return;
+    setBusy(true);
     setError(null);
     try {
-      await client.stopAgent();
+      await fn();
       setConfirming(false);
     } catch (e) {
       setError(e);
+    } finally {
+      setBusy(false);
     }
   };
+  const stop = () => run(() => client.stopAgent());
+  /** Reads the chain only: a revoke already sent is never sent again. */
+  const checkStop = () => run(() => client.checkStop());
 
   return (
     <section className={`status ${stopping ? "status--busy" : "status--running"} home__status`} aria-labelledby="status-title">
@@ -350,7 +375,11 @@ function StatusAndStop({ client, state, now }: { client: AutumnClient; state: Au
               <p className="keynum-label">
                 <Icon name="hourglass" /> Next purchase
               </p>
-              {next === null ? (
+              {plan.historyLoading ? (
+                <p className="keynum keynum--text waiting" role="status">
+                  <Spinner /> reading history…
+                </p>
+              ) : next === null ? (
                 <p className="keynum keynum--text">none scheduled</p>
               ) : due ? (
                 <>
@@ -388,8 +417,14 @@ function StatusAndStop({ client, state, now }: { client: AutumnClient; state: Au
               network fee. The agent will not be able to buy anything after that. Your gold and USD₮ stay in your wallet.
             </p>
             <div className="row">
-              <Button variant="danger" onClick={stop} autoFocus>
-                Yes, stop now
+              <Button variant="danger" onClick={stop} disabled={busy} autoFocus>
+                {busy ? (
+                  <>
+                    <Spinner /> Approve with your passkey…
+                  </>
+                ) : (
+                  "Yes, stop now"
+                )}
               </Button>
               <Button variant="plain" onClick={() => setConfirming(false)}>
                 Keep running
@@ -397,7 +432,7 @@ function StatusAndStop({ client, state, now }: { client: AutumnClient; state: Au
             </div>
           </div>
         )}
-        <FailureNotice error={error} onRetry={stop} prefix="Could not stop: " />
+        <FailureNotice error={error} onRetry={stop} onCheckAgain={busy ? undefined : checkStop} prefix="Could not stop: " />
       </div>
     </section>
   );
@@ -425,7 +460,7 @@ function ActivityRow({ item, now }: { item: ActivityItem; now: number }) {
       detail = (
         <>
           Paid <span className="num">{usdt(item.spent)} USD₮</span> at{" "}
-          <span className="num">{usdt(perGram(item.usdtPerOunce))}</span> per gram.{" "}
+          <span className="num">{usdt(perGram(item.usdtPerOunce))} USD₮</span> per gram.{" "}
           {item.trigger === "dip" ? "Extra buy: the price was at least 2% below this period's purchase price." : item.period === "day" ? "Daily buy." : "Weekly buy."}
         </>
       );
@@ -505,7 +540,7 @@ const TX_NOUN: Record<ActivityItem["kind"], string> = {
  * cap, period and expiry, and the agent identity.
  * A <details> so it stays out of the way on a phone; open by default on wide screens.
  */
-function OnchainProof({ state }: { state: AutumnState }) {
+function OnchainProof({ client, state }: { client: AutumnClient; state: AutumnState }) {
   const plan = state.plan!;
   const lim = plan.limits;
   const [open, setOpen] = useState(false);
@@ -571,22 +606,58 @@ function OnchainProof({ state }: { state: AutumnState }) {
               <Label icon="id">Identity</Label>
             </dt>
             <dd>
-              {state.identity?.registered ? (
-                state.identity.agentId ? (
-                  <ExtLink href={agentScanUrl(state.identity.agentId)} label={`Open agent ${state.identity.agentId} on 8004scan`}>
-                    ERC-8004 agent #{state.identity.agentId}
-                  </ExtLink>
-                ) : (
-                  "Registered (ERC-8004)"
-                )
-              ) : (
-                "Not registered yet (ERC-8004)"
-              )}
+              <IdentityLine client={client} identity={state.identity} />
             </dd>
           </div>
         </dl>
         <p className="muted small">{CUSTODY_TEXT}</p>
       </details>
     </section>
+  );
+}
+
+/**
+ * The wallet's ERC-8004 identity as the Identity Registry reports it, with its 8004scan page; when the registry shows
+ * none, a "Register identity" button (one passkey prompt), whether the agent runs, is stopped or has no plan.
+ */
+export function IdentityLine({ client, identity }: { client: AutumnClient; identity: AutumnState["identity"] }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  if (identity === null) return <>Could not be read from Celo right now (ERC-8004)</>;
+  if (identity.registered) {
+    return identity.agentId ? (
+      <ExtLink href={agentScanUrl(identity.agentId)} label={`Open agent ${identity.agentId} on 8004scan`}>
+        ERC-8004 agent #{identity.agentId}
+      </ExtLink>
+    ) : (
+      <>Registered (ERC-8004)</>
+    );
+  }
+  const register = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await client.registerIdentity();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      Not registered (ERC-8004).{" "}
+      <Button variant="plain" className="btn--small" onClick={register} disabled={busy}>
+        {busy ? (
+          <>
+            <Spinner /> Approve with your passkey…
+          </>
+        ) : (
+          "Register identity"
+        )}
+      </Button>
+      {error ? <FailureNotice error={error} /> : identity.lastError ? <span className="proof__note muted small">{identity.lastError}</span> : null}
+    </>
   );
 }

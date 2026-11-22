@@ -48,15 +48,37 @@ export function checkDestination(input: string, opts: { wallet: Address; contrac
   return { ok: true, address };
 }
 
-/** Parses a decimal amount typed by the owner into base units. Returns null for anything that is not a positive amount. */
-export function parseAmount(input: string, decimals: number): bigint | null {
-  const raw = input.trim().replace(/,/g, "");
+export type AmountParse = { ok: true; value: bigint } | { ok: false; problem: string };
+
+/**
+ * Parses a decimal amount typed by the owner into base units. Accepts a dot or
+ * a single decimal comma ("1,5" is 1.5): a comma followed by 1 to 6 digits and
+ * no dot is a decimal separator. Anything ambiguous (both a dot and a comma,
+ * more than one comma, a comma with 7 or more digits after it) is refused, so
+ * "1,500" is never read as 1500 or as 1.5 by guesswork.
+ */
+export function parseAmountText(input: string, decimals: number): AmountParse {
+  let raw = input.trim().replace(/\s+/g, "");
+  if (raw === "") return { ok: false, problem: "Enter an amount." };
+  const commas = (raw.match(/,/g) ?? []).length;
+  if (commas > 0) {
+    if (commas > 1 || raw.includes(".") || !/^\d*,\d{1,6}$/.test(raw)) {
+      return { ok: false, problem: "Use one decimal separator, for example 1.5 or 1,5, without thousands separators." };
+    }
+    raw = raw.replace(",", ".");
+  }
   const m = /^(\d*)(?:\.(\d*))?$/.exec(raw);
-  if (!m || (m[1] === "" && (m[2] ?? "") === "")) return null;
+  if (!m || (m[1] === "" && (m[2] ?? "") === "")) return { ok: false, problem: "Enter a positive number, for example 1.5." };
   const frac = m[2] ?? "";
-  if (frac.length > decimals) return null;
+  if (frac.length > decimals) return { ok: false, problem: `Enter at most ${decimals} decimals.` };
   const v = BigInt(m[1] || "0") * 10n ** BigInt(decimals) + BigInt((frac + "0".repeat(decimals)).slice(0, decimals) || "0");
-  return v > 0n ? v : null;
+  return v > 0n ? { ok: true, value: v } : { ok: false, problem: "Enter an amount above zero." };
+}
+
+/** parseAmountText's value, or null for anything that is not a positive, unambiguous amount. */
+export function parseAmount(input: string, decimals: number): bigint | null {
+  const r = parseAmountText(input, decimals);
+  return r.ok ? r.value : null;
 }
 
 /** The single call that sends `amount` of `asset` to `to`. */

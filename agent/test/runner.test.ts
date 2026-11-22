@@ -46,11 +46,35 @@ async function setup(opts: { dipBuy?: boolean; dayOfWeek?: number; hourUtc?: num
 const only = async (r: { tick: () => Promise<{ plans: any[] }> }) => (await r.tick()).plans[0];
 
 describe("runner", () => {
-  it("does nothing before the plan's due time in the week", async () => {
-    const { runner, executor, storage } = await setup({ dayOfWeek: 4, hourUtc: 9 }); // due Friday 09:00
+  it("makes a new plan's first purchase at once, then does nothing before the plan's due time in the week", async () => {
+    const { runner, executor, chain } = await setup({ dayOfWeek: 4, hourUtc: 9 }); // due Friday 09:00
+    expect(await only(runner)).toMatchObject({ decision: "bought" });
+    chain.now = Math.floor(Date.parse("2026-11-23T10:00:00Z") / 1000); // next Monday: a new week, due Friday
     expect(await only(runner)).toMatchObject({ decision: "not_due" });
-    expect(executor.calls).toHaveLength(0);
-    expect(storage.attempts).toHaveLength(0);
+    expect(executor.calls).toHaveLength(1);
+  });
+
+  it("buys a weekly plan created on Sunday 23:05 UTC at the next tick, not a week later", async () => {
+    const sun = Math.floor(Date.parse("2026-11-22T23:05:00Z") / 1000);
+    const { runner, executor, chain } = await setup({ now: sun, dayOfWeek: 6, hourUtc: 23 });
+    chain.now = Math.floor(Date.parse("2026-11-23T00:04:00Z") / 1000); // the tick lands after the Monday reset
+    expect(await only(runner)).toMatchObject({ decision: "bought" });
+    expect(executor.calls).toHaveLength(1);
+  });
+
+  it("keeps 12 hours between a daily catch-up purchase late in the day and the next day's purchase", async () => {
+    const created = Math.floor(Date.parse("2026-11-20T01:00:00Z") / 1000);
+    const { runner, executor, chain } = await setup({ now: created, period: "day", hourUtc: 1 });
+    expect(await only(runner)).toMatchObject({ decision: "bought" }); // first purchase, 20 Nov 01:00
+    chain.now = Math.floor(Date.parse("2026-11-21T23:50:00Z") / 1000); // the runner was away all of 21 Nov: catch-up
+    chain.spent = 0n; // the fake does not reset the daily counter by itself
+    expect(await only(runner)).toMatchObject({ decision: "bought" });
+    chain.now = Math.floor(Date.parse("2026-11-22T01:05:00Z") / 1000); // due 01:00, but only 75 minutes later
+    expect(await only(runner)).toMatchObject({ decision: "not_due" });
+    chain.now = Math.floor(Date.parse("2026-11-22T11:51:00Z") / 1000);
+    chain.spent = 0n; // the fake does not reset the daily counter by itself
+    expect(await only(runner)).toMatchObject({ decision: "bought" });
+    expect(executor.calls).toHaveLength(3);
   });
 
   it("buys once when due, with the decrypted session key and the exact two calls", async () => {
@@ -86,7 +110,8 @@ describe("runner", () => {
 
   it("decides from the chain: a purchase the database never saw blocks the week", async () => {
     const { runner, executor, chain } = await setup();
-    chain.land(WALLET, AMOUNT, 1_400n, WED_NOON - 3600); // e.g. a crash after send, before any DB write
+    chain.land(WALLET, AMOUNT, 1_400n, WED_NOON + 60); // e.g. a crash after send, before any DB write
+    chain.now = WED_NOON + 120;
     expect(await only(runner)).toMatchObject({ decision: "already_bought" });
     expect(executor.calls).toHaveLength(0);
   });

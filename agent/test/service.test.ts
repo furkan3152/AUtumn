@@ -88,13 +88,43 @@ describe("createPlanRequest", () => {
     await rejects(createPlanRequest(deps, "nope"), 400);
   });
 
-  it("limits unconfirmed plans per wallet for ten minutes only, so a stranger cannot block a wallet for long", async () => {
-    const { deps, chain } = setup();
-    for (let i = 0; i < 3; i++) await createPlanRequest(deps, body());
-    await rejects(createPlanRequest(deps, body()), 429);
+  it("reuses the wallet's un-granted plan for a retry instead of counting up, and replaces it only when asked", async () => {
+    const { deps, chain, storage } = setup();
+    const a = await createPlanRequest(deps, body());
+    // A cancelled passkey prompt, then Retry with the same choices: the same plan and key, nothing counted.
+    for (let i = 0; i < 5; i++) expect((await createPlanRequest(deps, body())).planId).toBe(a.planId);
+    // Different choices: refused unless the client abandons the waiting plan explicitly.
+    await rejects(createPlanRequest(deps, body({ amountUsdt: 10 })), 409, /waiting for its passkey/);
+    const b = await createPlanRequest(deps, body({ amountUsdt: 10, replacePending: true }));
+    expect(b.planId).not.toBe(a.planId);
+    expect(await storage.getPlan(a.planId)).toBeNull();
     await createPlanRequest(deps, body({ wallet: OTHER })); // other wallets are not affected
     chain.now += PENDING_PLAN_TTL_SECS + 1;
     await createPlanRequest(deps, body({ expiresAt: chain.now + PLAN_DURATION_SECS }));
+  });
+
+  it("never replaces or duplicates a plan whose key the chain shows granted: the client must start that one", async () => {
+    const { deps, chain, storage } = setup();
+    const a = await createPlanRequest(deps, body());
+    grantOnchain(chain, a);
+    for (const over of [{}, { amountUsdt: 10, replacePending: true }]) {
+      const err = await createPlanRequest(deps, body(over)).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(HttpError);
+      expect(err).toMatchObject({ status: 409, code: "pending_plan_granted", extra: { planId: a.planId, expected: a.expected } });
+    }
+    expect((await storage.getPlan(a.planId))?.status).toBe("pending_grant");
+    expect((await storage.listPlansForWallet(WALLET)).length).toBe(1);
+  });
+
+  it("answers 503 (try again), never a new plan, when the chain cannot be read for a waiting plan", async () => {
+    const { deps, chain } = setup();
+    await createPlanRequest(deps, body());
+    const down = Object.create(chain) as FakeChain;
+    down.sessionState = async () => {
+      throw new Error("fetch failed");
+    };
+    const err = await createPlanRequest({ ...deps, chain: down }, body({ amountUsdt: 10, replacePending: true })).catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 503, code: "chain_unavailable" });
   });
 
   it("deletes unconfirmed plans older than an hour with their keys, and caps plans per wallet", async () => {
@@ -104,6 +134,7 @@ describe("createPlanRequest", () => {
     await createPlanRequest(deps, body({ expiresAt: chain.now + PLAN_DURATION_SECS }));
     expect(await storage.getPlan(old.planId)).toBeNull();
     expect(await storage.getEncryptedSessionKey(old.planId)).toBeNull();
+    chain.now += PENDING_PLAN_TTL_SECS + 1; // no longer a waiting plan to reuse, but still kept
     await rejects(createPlanRequest({ ...deps, maxPlansPerWallet: 1 }, body({ expiresAt: chain.now + PLAN_DURATION_SECS })), 409, /number of plans/);
   });
 
@@ -127,7 +158,7 @@ describe("activatePlanRequest", () => {
     chain.txs.set(GRANT_TX, { txHash: GRANT_TX, succeeded: true, blockNumber: 1n, timestamp: NOW, keysRegistered: [], touchedWallet: true });
 
     // Not granted onchain yet: refused, plan stays pending.
-    await rejects(activatePlanRequest(deps, created.planId, { session: created.expected, grantTxHash: GRANT_TX }), 409, /not active onchain/);
+    await rejects(activatePlanRequest(deps, created.planId, { session: created.expected, grantTxHash: GRANT_TX }), 409, /not active onchain yet/);
     expect((await storage.getPlan(created.planId))?.status).toBe("pending_grant");
 
     grantOnchain(chain, created);
@@ -177,6 +208,31 @@ describe("activatePlanRequest", () => {
     await rejects(activatePlanRequest(deps, created.planId, { session: created.expected }), 409, /not active onchain/);
     grantOnchain(chain, created);
     expect(await activatePlanRequest(deps, created.planId, { session: created.expected })).toMatchObject({ status: "active", grantTxHash: null });
+  });
+
+  it("tells a real limits mismatch (409 limits_mismatch) from a failed read (503 chain_unavailable) and a key not visible yet", async () => {
+    const { deps, chain } = setup();
+    const created = await createPlanRequest(deps, body());
+    const notYet = await activatePlanRequest(deps, created.planId, { session: created.expected }).catch((e: unknown) => e);
+    expect(notYet).toMatchObject({ status: 409, code: "not_visible" });
+    grantOnchain(chain, created);
+    const down = Object.create(chain) as FakeChain;
+    down.sessionState = async () => {
+      throw new Error("HTTP request failed. Status: 502");
+    };
+    const flaky = await activatePlanRequest({ ...deps, chain: down }, created.planId, { session: created.expected }).catch((e: unknown) => e);
+    expect(flaky).toMatchObject({ status: 503, code: "chain_unavailable" });
+    expect((flaky as Error).message).not.toMatch(/502|HTTP request/);
+    const noTx = Object.create(chain) as FakeChain;
+    noTx.txFacts = async () => {
+      throw new Error("timeout");
+    };
+    expect(await activatePlanRequest({ ...deps, chain: noTx }, created.planId, { session: created.expected, grantTxHash: GRANT_TX }).catch((e: unknown) => e)).toMatchObject({ status: 503 });
+    chain.cap += 1n;
+    const wrong = await activatePlanRequest(deps, created.planId, { session: created.expected }).catch((e: unknown) => e);
+    expect(wrong).toMatchObject({ status: 409, code: "limits_mismatch" });
+    chain.cap -= 1n;
+    expect(await activatePlanRequest(deps, created.planId, { session: created.expected })).toMatchObject({ status: "active" });
   });
 
   it("refuses to activate a key the account holds as a super admin", async () => {
@@ -245,6 +301,13 @@ describe("walletViewRequest", () => {
     expect(v.plans.map((p) => p.id)).toEqual([created.planId]);
     expect(v.runLog).toEqual([expect.objectContaining({ planId: created.planId, amountIn: "5000000", out: "1400", kind: "weekly" })]);
     expect(JSON.stringify(v)).not.toMatch(/ciphertext|privateKey|authTag/);
+    await storage.appendRunLog({ planId: created.planId, periodId: "2026-11-16", at: NOW + 1, outcome: "skipped", reason: `relay said no\n${"x".repeat(500)}`, kind: "relay_failure" });
+    expect((await walletViewRequest(deps, WALLET)).runLog[0]!.reason).toBe("relay said no");
+    // Mixed case must be a correct checksum; all-lowercase is fine.
+    const good = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
+    await walletViewRequest(deps, good);
+    await walletViewRequest(deps, good.toLowerCase());
+    await rejects(walletViewRequest(deps, good.replace("aA", "Aa")), 400, /checksum/);
   });
 });
 

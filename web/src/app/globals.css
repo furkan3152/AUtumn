@@ -1052,6 +1052,8 @@ body:has(.landing) .main {
   }
   .step {
     grid-template-columns: 1fr;
+    /* Fixed marker row: the connector (::before) on steps 1 and 2 otherwise made their first row taller than step 3's. */
+    grid-template-rows: 52px 1fr;
     justify-items: center;
     gap: 10px;
   }
@@ -2501,4 +2503,15 @@ body:has(.landing) .main {
   .preset:hover:not(.is-on) {
     transform: none;
   }
+}
+
+/* Text links on the page backdrop (the landing's call to action): light on dark, AA contrast. */
+.cta .textlink {
+  color: var(--gold-light);
+}
+.cta .textlink:hover:not(:disabled) {
+  color: var(--paper-hi);
+}
+.cta .textlink:disabled {
+  color: var(--cream-muted);
 }

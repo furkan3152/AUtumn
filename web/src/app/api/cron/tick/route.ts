@@ -1,5 +1,5 @@
 import { cronAuthorized } from "@autumn/agent";
-import { json, tick } from "@/server/autumn";
+import { json, tick, notAllowed } from "@/server/autumn";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,3 +24,8 @@ async function run(req: Request) {
 
 export const GET = run;
 export const POST = run;
+
+const refuse = notAllowed("GET", "POST");
+export const PUT = refuse;
+export const PATCH = refuse;
+export const DELETE = refuse;

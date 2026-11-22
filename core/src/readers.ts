@@ -214,6 +214,11 @@ export type PurchaseQuery = {
   blockRange?: bigint;
   /** Parallel getLogs requests. Default 8. */
   concurrency?: number;
+  /**
+   * Called after each batch of windows with the last block it covered and the
+   * purchases it found, so a caller can save its progress as it goes.
+   */
+  onBatch?: (toBlock: bigint, purchases: Purchase[]) => void | Promise<void>;
 };
 
 /** GoldBuyer `Bought` events, oldest first, with block timestamps. */
@@ -228,6 +233,22 @@ export async function readPurchases(client: PublicClient, q: PurchaseQuery): Pro
   const event = goldBuyerAbi.find((x) => x.type === "event" && x.name === "Bought")!;
   const logs: Awaited<ReturnType<typeof client.getLogs<typeof event>>> = [];
   const concurrency = Math.max(1, q.concurrency ?? 8);
+  const timestamps = new Map<bigint, number>();
+  const toPurchases = async (raw: typeof logs): Promise<Purchase[]> => {
+    const parsed = parseEventLogs({ abi: goldBuyerAbi, logs: raw, eventName: "Bought" });
+    const blocks = [...new Set(parsed.map((l) => l.blockNumber))].filter((n) => !timestamps.has(n));
+    await Promise.all(blocks.map(async (n) => timestamps.set(n, Number((await client.getBlock({ blockNumber: n })).timestamp))));
+    return parsed.map((l) => ({
+      buyer: getAddress(l.args.buyer),
+      amountIn: l.args.amountIn,
+      out: l.args.out,
+      priceUsdtPerXaut: l.args.out > 0n ? priceUsdtPerXaut(l.args.amountIn, l.args.out) : 0n,
+      txHash: l.transactionHash,
+      blockNumber: l.blockNumber,
+      logIndex: l.logIndex,
+      timestamp: timestamps.get(l.blockNumber)!,
+    }));
+  };
   for (let i = 0; i < windows.length; i += concurrency) {
     const batch = await Promise.all(
       windows.slice(i, i + concurrency).map(([fromBlock, toBlock]) =>
@@ -241,25 +262,11 @@ export async function readPurchases(client: PublicClient, q: PurchaseQuery): Pro
         }),
       ),
     );
-    for (const b of batch) logs.push(...b);
+    const fresh = batch.flat();
+    logs.push(...fresh);
+    if (q.onBatch) await q.onBatch(windows[Math.min(i + concurrency, windows.length) - 1]![1], await toPurchases(fresh));
   }
-  const parsed = parseEventLogs({ abi: goldBuyerAbi, logs, eventName: "Bought" });
-  const timestamps = new Map<bigint, number>();
-  const blocks = [...new Set(parsed.map((l) => l.blockNumber))];
-  await Promise.all(
-    blocks.map(async (n) => timestamps.set(n, Number((await client.getBlock({ blockNumber: n })).timestamp))),
-  );
-  return parsed
-    .map((l) => ({
-      buyer: getAddress(l.args.buyer),
-      amountIn: l.args.amountIn,
-      out: l.args.out,
-      priceUsdtPerXaut: l.args.out > 0n ? priceUsdtPerXaut(l.args.amountIn, l.args.out) : 0n,
-      txHash: l.transactionHash,
-      blockNumber: l.blockNumber,
-      logIndex: l.logIndex,
-      timestamp: timestamps.get(l.blockNumber)!,
-    }))
+  return (await toPurchases(logs))
     .sort((a, b) => (a.blockNumber === b.blockNumber ? a.logIndex - b.logIndex : a.blockNumber < b.blockNumber ? -1 : 1));
 }
 

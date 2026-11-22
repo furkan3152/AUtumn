@@ -1,16 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BACKUP_CODE_TEXT, type AutumnClient } from "@/lib/autumn";
+import { BACKUP_CODE_SYNCED_TEXT, BACKUP_CODE_TEXT, type AutumnClient } from "@/lib/autumn";
 import { errorText } from "@/lib/useAutumn";
 import { Button, CopyButton, Panel, ScreenHead, Spinner } from "../ui";
 import { Icon } from "../icons";
 
 /**
- * "Save your backup code": shown right after creating a wallet whose passkey
- * is device-bound, and again from the Wallet panel.
+ * "Save your backup code": shown right after creating every wallet, and again from the Wallet panel. For a
+ * device-bound passkey it is the only way back in after the browser's data is cleared; for a synced one a second way.
  */
-export function BackupCode({ client, onDone, onBack }: { client: AutumnClient; onDone: () => void; onBack?: () => void }) {
+export function BackupCode({ client, onDone, onBack, deviceBound = true }: { client: AutumnClient; onDone: () => void; onBack?: () => void; deviceBound?: boolean }) {
   const [code, setCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -31,7 +31,7 @@ export function BackupCode({ client, onDone, onBack }: { client: AutumnClient; o
     <div className="screen backup">
       <ScreenHead title="Save your backup code" onBack={onBack} />
       <Panel title="Your backup code" icon="passkey">
-        <p>{BACKUP_CODE_TEXT}</p>
+        <p>{deviceBound ? BACKUP_CODE_TEXT : BACKUP_CODE_SYNCED_TEXT}</p>
         {code ? (
           <>
             <p className="codebox num" aria-label="Your backup code">
