@@ -1,0 +1,3 @@
+block,time,txHash,buyer,team,usdtIn,xaut0Out,route,buyerKind,autumnSession,sessionNow,tagInnerCalls,tagOuter,verifyTx
+83395590,2026-11-21T21:25:48.000Z,0x015b6ddf1524028a34f0652d9a6fee28c01dfc7bf45a1a2a6927321e2863d588,0x53180bbC54Bc9561c08805ca4832be85345fF535,team deployer/test,1,0.00028,direct call to GoldBuyer,EOA,,,,false,null
+83444571,2026-11-22T11:02:09.000Z,0x21ccf27b7a1a644415ef8f3b8c42348254ea61e73a4867a1a2cca368269e32ca,0x15855ae2E04Fd00eFA45cB70D2C29E5777925429,team owner test,1,0.000281,Altana Orchestrator intent,Altana wallet,true,revoked (not on the account),2,false,null

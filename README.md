@@ -351,6 +351,29 @@ often unavailable. Two transactions raised its capacity to 1,800 observations
 The first purchase through the contract was a team test of 1 USD₮
 ([`0x015b…d588`](https://celoscan.io/tx/0x015b6ddf1524028a34f0652d9a6fee28c01dfc7bf45a1a2a6927321e2863d588)).
 
+## Verify it yourself
+
+Every purchase is public. `scripts/proof.mjs` reads them from Celo and needs
+no key, no server and no funds (Node 22, after `cd core && npm ci && npm run
+build` and `cd agent && npm ci`):
+
+```bash
+node scripts/proof.mjs
+```
+
+It lists every `Bought` event of GoldBuyer since its deploy block (block,
+time, transaction, buyer, USD₮ in, XAUt0 out), says whether each buyer is an
+Altana wallet whose signing key had Autumn's allowlist and whether that key
+is still active or revoked, whether our attribution tag `celo_c24c5a65e5a3`
+is in the transaction and what Celo's `verifyTx` returns, flags our own test
+wallets, and prints totals (unique non-team buyers, purchases, repeat
+buyers, volume). It writes the same as `docs/proof/purchases.json` and
+`purchases.csv`.
+
+The funded end-to-end run that proves the grant, a purchase, the refusals,
+the revoke and "Send out" is `scripts/e2e-mainnet.mjs`
+([docs/mainnet-run.md](docs/mainnet-run.md)).
+
 ## Licence
 
 MIT

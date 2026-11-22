@@ -35,6 +35,110 @@ Until this run is done, none of these has happened on any chain:
     one-time KeyStore registration it carries if it is the wallet's first
     passkey transaction.
 
+## Automated run with a private-key wallet: `scripts/e2e-mainnet.mjs`
+
+The harness runs steps 2 to 8 of this checklist against the live server's
+public API, with an EOA private key as the wallet's admin instead of a
+passkey (the SDK's private-key signer: the Altana wallet address is the
+EOA's own address, upgraded with EIP-7702 on its first admin transaction).
+It grants exactly what the browser grants (`planToSessionGrant` from core,
+`agentIdentity: false`, fee in USD₮, then `registerAgentIdentity` with the
+browser's record), so it proves everything above except the passkey
+ceremony (items 1, 2 and the passkey half of 13) and restore (section 9).
+
+It sends real transactions. Build core first (`cd core && npm ci && npm run
+build`; agent needs `npm ci` for the SDK), then:
+
+```bash
+# what it will do, and the read-only preflight (no keys needed)
+node scripts/e2e-mainnet.mjs --dry-run
+
+# the run; every step not yet passed, in order
+E2E_ADMIN_KEY=0x…  E2E_CRON_SECRET=…  E2E_RETURN_TO=0x…  node scripts/e2e-mainnet.mjs
+# optional: E2E_BASE_URL (default https://autumn-gold.onrender.com), E2E_AMOUNT=1|5|10 (default 1),
+# E2E_PERIOD=day|week (default day), E2E_RPC_URL, E2E_TICK_WAIT_MINS (retry a skipped tick)
+
+# one step
+node scripts/e2e-mainnet.mjs --step probes
+```
+
+| Step | What it sends | What it checks |
+|---|---|---|
+| `preflight` | nothing | server health (configured, live), GoldBuyer code, pool price check, KeyStore fee, balances; stops before the grant if CELO or USD₮ is short and prints exactly how much to add |
+| `wallet` | nothing onchain | `createWallet` with the relay if the EOA is not upgraded yet; the relay lists the admin key |
+| `plan` | grant (admin key) | server's proposed limits = core's grant; `sessionMatchesGrant`; onchain `sessionLimitsMismatch` is none; `KeyRegistered` events; CELO and USD₮ the grant cost; server activates |
+| `tick` | cron tick (server buys) | one `Bought` for the wallet; USD₮ moved by amount + relay fee, XAUt0 by `out`; fee in USD₮ equals the intent's `paymentAmount` and is ≤ 0.05; session `spent` = amount + fee; our tag in every inner call; what `verifyTx` returns |
+| `tick-again` | cron tick | `already_bought`, no new purchase |
+| `probes` | `over-cap`, `outside-allowlist` through `/api/admin/probe` | `refused`, no transaction or purchase, balances unchanged (server's and the harness's own reads); the SDK/relay code and text |
+| `identity` | `registerAgentIdentity` (admin key) if the wallet has none | registry `balanceOf`, `ownerOf`, `tokenURI` record, agent id, 8004scan URL |
+| `revoke` | revoke (admin key), stop, `after-revoke` probe, cron tick | KeyStore `isValidKey` false, `getKey` reverts, `getKeys()` no longer lists it; server plan stopped; probe refused; the tick does not act on the plan |
+| `send-out` | XAUt0, CELO, then USD₮ to `E2E_RETURN_TO` (admin key, fee in USD₮) | each transfer's receipt, the wallet's and the destination's balances at that block |
+
+Funds: about **20.4 CELO** for a new wallet (two KeyStore registrations,
+`2 × fee × 1.1`; the 10% is refunded, so about 18.4 CELO is spent at
+today's fee of 9.21 CELO per key) and **3.3 USD₮** for a 1 USD₮ daily plan
+(1 USD₮ of gold, which comes back in `send-out` as XAUt0, about 0.06 USD₮ of
+relay fees, and 2.05 USD₮ that the over-cap probe needs to see in the wallet
+so that only the cap can refuse it; it is not spent). The preflight reads
+the live figures. Use 4 USD₮ for margin.
+
+Everything is written to `docs/runs/e2e-state-<wallet>.json` (progress) and
+`docs/runs/e2e-report-<wallet>.json` (every fact, transaction and Celoscan
+link per step). Neither holds a key or a secret; the harness never prints
+`E2E_ADMIN_KEY` or `E2E_CRON_SECRET` and redacts them from any error text.
+A step that passed is never run again. A step that sends records its
+transaction before it waits, so a rerun after a crash continues from the
+chain (an active key is not granted twice, a revoked key is not revoked
+again, a sent transfer is verified, not repeated). Every wait is bounded
+(receipts 120 s, session changes 90 s, a tick 300 s, the identity 60 s).
+The first tick refuses to start in the last 15 minutes of a period, so the
+second tick sees the same period. The cron tick runs every active plan on
+the server, as the hourly schedule does; plans not due do nothing.
+
+### The admin probe route
+
+`POST /api/admin/probe` with `Authorization: Bearer $CRON_SECRET` and
+`{ "planId": "<uuid>", "kind": "over-cap" | "outside-allowlist" | "after-revoke" | "status" }`.
+The secret is checked exactly as for `/api/cron/tick` (constant time, at
+least 16 characters, 401 otherwise) before the body is read; any other body
+shape is a 400 before the database is touched. It answers with the session
+and balances before and after, the calls it built, the SDK/relay error
+(`failure.kind`, `failure.code`, `sdkError.message`), any transaction and its
+receipt, and any purchase by the wallet during the probe.
+
+Why it cannot buy beyond the plan or move funds anywhere but through
+`GoldBuyer.buy` into the owner's wallet (`agent/src/probe.ts`):
+
+1. The request names only a plan and a kind. Targets, calldata and amounts
+   are built on the server: a purchase is exactly `USD₮.approve(GoldBuyer)`
+   + `GoldBuyer.buy` with the configured GoldBuyer (which sends XAUt0 only to
+   its caller); the allowlist probe is `USD₮.transfer(<the wallet itself>, 0)`.
+2. A probe is sent only when a fresh chain read makes the refusal certain:
+   `over-cap` needs an active session with exactly the plan's limits and
+   uses the whole period cap plus one purchase (2.05 USD₮ on a 1.05 cap), so
+   neither another spend nor a reset at midnight can make it fit;
+   `outside-allowlist` needs the onchain allowlist to be exactly the plan's
+   (no `transfer`); `after-revoke` needs the key to be inactive and still
+   uses an amount above the cap. `status` sends nothing. A dry-run server
+   (`AUTUMN_EXECUTION` not `live`) sends nothing.
+3. The chain is the last guard: the session key can only call
+   `USD₮.approve` and `GoldBuyer.buy` (and the Orchestrator entry, which
+   cannot move funds) within its USD₮ cap. A refused intent pays no relay
+   fee; an intent that landed and reverted would pay one, within the cap.
+
+Each probe adds a run-log entry starting with `probe:`, so the owner's app
+shows it. `agent/dist/cli.js try-buy` (sections 5 and 7) uses the same code,
+and now also refuses an amount that is not above the whole period cap.
+
+### Who bought through GoldBuyer: `scripts/proof.mjs`
+
+Read-only. `node scripts/proof.mjs` lists every `Bought` event since the
+deploy block (5,000-block windows, retried on forno's "block is out of
+range"), the route (direct call or Orchestrator intent), whether the signing
+key had Autumn's allowlist and is active or revoked now, our tag in the
+inner calls and `verifyTx`'s answer, flags team wallets, and writes
+`docs/proof/purchases.json` and `purchases.csv`.
+
 ## Before you start
 
 - [ ] GoldBuyer is deployed on Celo mainnet. Note its address and block.
@@ -120,6 +224,13 @@ cd agent
 node --env-file=../web/.env.local dist/cli.js try-buy <planId> 2000000 --i-understand-this-sends
 ```
 
+Against a deployment whose database you cannot reach, use the admin route instead:
+
+```bash
+curl -X POST -H "Authorization: Bearer $CRON_SECRET" -H "content-type: application/json" \
+  -d '{"planId":"<planId>","kind":"over-cap"}' https://<app>/api/admin/probe
+```
+
 - [ ] Expected: `"outcome": "refused"` with failure kind `cap_exceeded`.
 - [ ] Record the full output, including the SDK error code and text.
 - [ ] Check that no `Bought` event appeared and that USD₮ did not move.
@@ -145,6 +256,8 @@ node --env-file=../web/.env.local dist/cli.js try-buy <planId> 2000000 --i-under
 ```bash
 node --env-file=../web/.env.local dist/cli.js try-buy <planId> 1000000 --i-understand-this-sends
 ```
+
+Or `{"planId":"<planId>","kind":"after-revoke"}` to `/api/admin/probe` as in section 5.
 
 - [ ] Expected: `"outcome": "refused"`; record the failure kind and text.
 - [ ] Run the tick. The plan must not appear among active plans.

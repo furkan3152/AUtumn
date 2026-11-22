@@ -11,7 +11,8 @@ const USAGE = `usage:
   autumn-agent tick                          one runner pass (sends only with AUTUMN_EXECUTION=live)
   autumn-agent try-buy <planId> <usdtUnits> --i-understand-this-sends
                                              refusal probe for docs/mainnet-run.md: sends one purchase
-                                             that must be refused (over the cap, or after revoke)`;
+                                             that must be refused: above the whole period cap of an
+                                             active session, or any amount after revoke`;
 
 async function main() {
   const cmd = process.argv[2];

@@ -16,7 +16,18 @@ export { createProductionRunner, createProductionService, createExecutor, server
 export { inProcessSendLock, pgSendLock, sendLockKey, SendLockError, type SendLock } from "./sendLock.js";
 export { createDirectExecutor, type DirectExecutor, type DirectExecutorOptions, type DirectOutcome, type PreparedSubmission } from "./direct.js";
 export * from "./service.js";
-export { tryBuy, type TryBuyResult } from "./probe.js";
+export {
+  tryBuy,
+  runAdminProbe,
+  parseProbeRequest,
+  outsideAllowlistCall,
+  overCapAmount,
+  PROBE_KINDS,
+  type TryBuyResult,
+  type ProbeKind,
+  type AdminProbeResult,
+  type AdminProbeDeps,
+} from "./probe.js";
 export { encryptSessionKey, decryptSessionKey, generateSessionKey, parseEncryptionKey } from "./crypto.js";
 export type { ChainReader, SessionExecutor } from "./ports.js";
 export * from "./storage/index.js";
