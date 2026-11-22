@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import { CUSTODY_TEXT, LIMITS_TEXT, type AutumnClient, type FeeFacts, type GoldPrice, type Registration, type Wallet } from "@/lib/autumn";
+import { CUSTODY_TEXT, LIMITS_TEXT, type AutumnClient, type CreationMode, type FeeFacts, type GoldPrice, type Registration, type Wallet } from "@/lib/autumn";
 import { formatDateTime, perGram, usdt } from "@/lib/format";
 import { errorText } from "@/lib/useAutumn";
 import { Logo } from "../Logo";
@@ -36,22 +36,22 @@ type LandingProps = {
 
 export function Landing(props: LandingProps) {
   const [busy, setBusy] = useState<null | "create" | "restore" | "code">(null);
-  const [error, setError] = useState<{ kind: "create" | "restore"; e: unknown } | null>(null);
+  const [error, setError] = useState<{ kind: "create" | "restore"; mode: CreationMode; e: unknown } | null>(null);
   const [codeOpen, setCodeOpen] = useState(false);
   const [code, setCode] = useState("");
   const [codeError, setCodeError] = useState<string | null>(null);
   const codeId = useId();
 
-  const run = async (kind: "create" | "restore") => {
+  const run = async (kind: "create" | "restore", mode: CreationMode = "auto") => {
     setBusy(kind);
     setError(null);
     try {
       if (kind === "create") {
-        const w = await props.client.createWallet();
+        const w = await props.client.createWallet({ mode });
         props.onCreated?.(w);
       } else await props.client.restoreWallet();
     } catch (e) {
-      setError({ kind, e });
+      setError({ kind, mode, e });
       setBusy(null);
     }
   };
@@ -162,6 +162,9 @@ export function Landing(props: LandingProps) {
               "Create wallet with passkey"
             )}
           </Button>
+          <button type="button" className="textlink" onClick={() => run("create", "device")} disabled={busy !== null}>
+            My phone only offers another device
+          </button>
           <Button variant="plain" block onClick={() => run("restore")} disabled={busy !== null}>
             {busy === "restore" ? (
               <>
@@ -171,7 +174,13 @@ export function Landing(props: LandingProps) {
               "I already have an Autumn passkey"
             )}
           </Button>
-          {error && <FailureNotice error={error.e} onRetry={() => run(error.kind)} />}
+          {error && (
+            <FailureNotice
+              error={error.e}
+              onRetry={() => run(error.kind, error.mode)}
+              onDeviceFallback={error.kind === "create" && error.mode !== "device" ? () => run("create", "device") : undefined}
+            />
+          )}
           {!codeOpen ? (
             <Button variant="plain" block className="btn--quiet" onClick={() => setCodeOpen(true)} disabled={busy !== null}>
               Restore with backup code

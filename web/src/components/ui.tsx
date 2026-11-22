@@ -191,9 +191,21 @@ export function Spinner() {
  * A failure from an action. A failed passkey step gets a clear panel with its
  * plain message and a Retry button; any other error is a short red line.
  */
-export function FailureNotice({ error, onRetry, prefix = "" }: { error: unknown; onRetry?: () => void; prefix?: string }) {
+export function FailureNotice({
+  error,
+  onRetry,
+  onDeviceFallback,
+  prefix = "",
+}: {
+  error: unknown;
+  onRetry?: () => void;
+  /** Offered after a cancelled or unsupported passkey creation: create the passkey with this device's screen lock. */
+  onDeviceFallback?: () => void;
+  prefix?: string;
+}) {
   if (error === null || error === undefined) return null;
   if (error instanceof PasskeyError) {
+    const fallback = onDeviceFallback && error.step === "create" && (error.reason === "cancelled" || error.reason === "unsupported");
     return (
       <div className="failure" role="alert">
         <p className="failure__title">
@@ -205,6 +217,14 @@ export function FailureNotice({ error, onRetry, prefix = "" }: { error: unknown;
           <Button variant="plain" className="btn--small" onClick={onRetry}>
             Retry
           </Button>
+        )}
+        {fallback && (
+          <>
+            <Button variant="plain" className="btn--small" onClick={onDeviceFallback}>
+              Use this phone&apos;s screen lock instead
+            </Button>
+            <p className="small">If your phone only offered another device or a USB key, choose this. The passkey will live on this device only.</p>
+          </>
         )}
       </div>
     );

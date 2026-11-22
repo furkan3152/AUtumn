@@ -15,6 +15,10 @@
  *   credProps, rp, challenge, algorithms).
  * - A device that can store a discoverable passkey still makes one with
  *   "preferred", exactly as before.
+ * - Where even "preferred" only offers another device (no passkey provider on
+ *   the phone), `DEVICE_AUTHENTICATOR_SELECTION` asks for a device-bound
+ *   passkey behind the screen lock: chosen from the browser's capabilities,
+ *   or by the owner ("Use this phone's screen lock instead").
  * - `userHandleFillingGetFn` is the signing counterpart: an authenticator
  *   does not return the user handle for a non-discoverable credential, and
  *   porto's `Key.sign` refuses an assertion without one. The signature does
@@ -41,13 +45,116 @@ export const AUTUMN_AUTHENTICATOR_SELECTION = {
 
 /** The SDK's creation options with `residentKey: "preferred"`, `requireResidentKey: false`, `userVerification: "required"`; nothing else changes. */
 export function withPreferredResidentKey(options: CredentialCreationOptions | undefined): CredentialCreationOptions {
+  return withAuthenticatorSelection(options, "preferred");
+}
+
+/* ---------- Device-bound passkeys (this device's screen lock) ---------- */
+
+/**
+ * Why a second request exists: on some Android phones no passkey provider
+ * (Google Password Manager) is available to Chrome. Chrome sends requests
+ * with `residentKey` "required" or "preferred" through Android's Credential
+ * Manager, which then only offers "Create a passkey on another device?".
+ * A request with `residentKey` "discouraged" (the WebAuthn default) goes
+ * through the older Play Services FIDO2 path, which can make a passkey on
+ * the phone itself: device-bound, not discoverable, protected by the screen
+ * lock. Autumn already signs with such passkeys (see `userHandleFillingGetFn`)
+ * and restores them from the backup code.
+ */
+export const DEVICE_AUTHENTICATOR_SELECTION = {
+  residentKey: "discouraged",
+  requireResidentKey: false,
+  authenticatorAttachment: "platform",
+  userVerification: "required",
+} as const satisfies AuthenticatorSelectionCriteria;
+
+/**
+ * - "auto": choose from what the browser reports (`chooseRequestKind`).
+ * - "device": always the device-bound request, for phones that report a passkey provider they cannot use.
+ */
+export type CreationMode = "auto" | "device";
+/** Which creation request is sent: "preferred" (`AUTUMN_AUTHENTICATOR_SELECTION`) or "device" (`DEVICE_AUTHENTICATOR_SELECTION`). */
+export type RequestKind = "preferred" | "device";
+
+/** What the browser says about its platform authenticators. undefined: it did not say. */
+export type PlatformCapabilities = {
+  /** getClientCapabilities() key "passkeyPlatformAuthenticator". */
+  passkeyPlatformAuthenticator: boolean | undefined;
+  /** isUserVerifyingPlatformAuthenticatorAvailable(), or else the getClientCapabilities() key "userVerifyingPlatformAuthenticator". */
+  userVerifyingPlatformAuthenticator: boolean | undefined;
+};
+
+/**
+ * The request to send. Device-bound only when forced, or when the browser
+ * says no passkey platform authenticator is available while a user-verifying
+ * platform authenticator is. Anything unknown keeps "preferred".
+ */
+export function chooseRequestKind(mode: CreationMode, caps: PlatformCapabilities): RequestKind {
+  if (mode === "device") return "device";
+  if (caps.passkeyPlatformAuthenticator === false && caps.userVerifyingPlatformAuthenticator === true) return "device";
+  return "preferred";
+}
+
+/** The authenticatorSelection fields Autumn sets for a request kind. */
+export function authenticatorSelectionFor(kind: RequestKind): AuthenticatorSelectionCriteria {
+  return kind === "device" ? { ...DEVICE_AUTHENTICATOR_SELECTION } : { ...AUTUMN_AUTHENTICATOR_SELECTION };
+}
+
+/** The SDK's creation options with the authenticatorSelection fields of `kind`; nothing else changes. */
+export function withAuthenticatorSelection(options: CredentialCreationOptions | undefined, kind: RequestKind): CredentialCreationOptions {
   if (!options?.publicKey) throw new Error("The passkey request has no publicKey options.");
   return {
     ...options,
     publicKey: {
       ...options.publicKey,
-      authenticatorSelection: { ...options.publicKey.authenticatorSelection, ...AUTUMN_AUTHENTICATOR_SELECTION },
+      authenticatorSelection: { ...options.publicKey.authenticatorSelection, ...authenticatorSelectionFor(kind) },
     },
+  };
+}
+
+type CapabilityApi = {
+  getClientCapabilities?: () => Promise<Record<string, unknown>>;
+  isUserVerifyingPlatformAuthenticatorAvailable?: () => Promise<boolean>;
+};
+
+/**
+ * Reads the browser's platform capabilities. Never rejects: anything the
+ * browser does not answer is undefined. Spec (WebAuthn L3 §5.1.7, §5.8.7): a
+ * missing key means "not known"; false means "known to be not supported".
+ */
+export async function readPlatformCapabilities(api: CapabilityApi | undefined = globalThis.PublicKeyCredential as CapabilityApi | undefined): Promise<PlatformCapabilities> {
+  let caps: Record<string, unknown> = {};
+  try {
+    if (typeof api?.getClientCapabilities === "function") caps = (await api.getClientCapabilities()) ?? {};
+  } catch {
+    /* unknown */
+  }
+  const bool = (v: unknown) => (typeof v === "boolean" ? v : undefined);
+  let uvpa: boolean | undefined;
+  try {
+    if (typeof api?.isUserVerifyingPlatformAuthenticatorAvailable === "function") uvpa = bool(await api.isUserVerifyingPlatformAuthenticatorAvailable());
+  } catch {
+    /* unknown */
+  }
+  return {
+    passkeyPlatformAuthenticator: bool(caps.passkeyPlatformAuthenticator),
+    userVerifyingPlatformAuthenticator: uvpa ?? bool(caps.userVerifyingPlatformAuthenticator),
+  };
+}
+
+/**
+ * A `createFn` for the SDK that sends the request of `kind` and reports
+ * whether the passkey is discoverable. A device-bound request counts as not
+ * discoverable unless the browser's credProps says `rk: true`.
+ */
+export function selectionCreateFn(create: CreateFn, kind: RequestKind, onCreated: (discoverable: Discoverable) => void): CreateFn {
+  return async (options) => {
+    const credential = await create(withAuthenticatorSelection(options, kind));
+    if (credential) {
+      const d = discoverableFrom(credential);
+      onCreated(kind === "device" ? d === true : d);
+    }
+    return credential;
   };
 }
 
@@ -67,11 +174,7 @@ export function discoverableFrom(credential: Credential | null | undefined): Dis
  * `withPreferredResidentKey` and reports whether it is discoverable.
  */
 export function preferredResidentKeyCreateFn(create: CreateFn, onCreated: (discoverable: Discoverable) => void): CreateFn {
-  return async (options) => {
-    const credential = await create(withPreferredResidentKey(options));
-    if (credential) onCreated(discoverableFrom(credential));
-    return credential;
-  };
+  return selectionCreateFn(create, "preferred", onCreated);
 }
 
 /** The browser's own credential functions, bound. */

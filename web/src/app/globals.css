@@ -581,6 +581,32 @@ body:has(.landing) .main {
   font-size: var(--fs-md);
 }
 
+/* A quiet text link under a main button. */
+.textlink {
+  justify-self: center;
+  min-height: 44px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--rust);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+.textlink:hover:not(:disabled) {
+  text-decoration-thickness: 3px;
+  color: #5e1e08;
+}
+
+.textlink:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
 .btn--block {
   display: flex;
   width: calc(100% - 8px);

@@ -85,11 +85,15 @@ import {
   browserCreateFn,
   browserGetFn,
   hasWebAuthn,
+  chooseRequestKind,
   passkeyFailure,
-  preferredResidentKeyCreateFn,
+  readPlatformCapabilities,
+  selectionCreateFn,
   unsupportedPasskeys,
   userHandleFillingGetFn,
+  type CreationMode,
   type Discoverable,
+  type PlatformCapabilities,
 } from "./passkey";
 import { readRecord, reconcileRecord, saveRecord } from "./walletStore";
 
@@ -237,6 +241,10 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
       discoverableOf(w) === true ? undefined : { getFn: userHandleFillingGetFn(browserGetFn(), w.address) as NonNullable<PasskeyWebAuthnFns["getFn"]> };
     return { wallet: { address: w.address }, signer: signerFromPasskey(w.credential, webAuthn ? { webAuthn } : undefined) };
   }
+  /** Read once per page load, ahead of the first click, so the passkey prompt is not delayed. */
+  let capabilities: Promise<PlatformCapabilities> | null = null;
+  const platformCapabilities = () => (capabilities ??= readPlatformCapabilities());
+  if (hasWebAuthn()) void platformCapabilities();
   function assertPasskeyOrigin() {
     const problem = passkeyOriginProblem(cfg, window.location);
     if (problem) throw new Error(problem);
@@ -892,12 +900,14 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
         }
       };
     },
-    async createWallet() {
+    async createWallet(options?: { mode?: CreationMode }) {
       assertPasskeyOrigin();
       if (!hasWebAuthn()) throw unsupportedPasskeys("create");
-      // residentKey "preferred" instead of porto's "required": see passkey.ts. Everything else porto sets is kept.
+      // residentKey "preferred" instead of porto's "required", or the device-bound request when the browser reports no
+      // passkey provider or the owner chose it: see passkey.ts. Everything else porto sets is kept.
+      const kind = chooseRequestKind(options?.mode ?? "auto", await platformCapabilities());
       let discoverable: Discoverable = "unknown";
-      const createFn = preferredResidentKeyCreateFn(browserCreateFn(), (d) => (discoverable = d));
+      const createFn = selectionCreateFn(browserCreateFn(), kind, (d) => (discoverable = d));
       let w: Awaited<ReturnType<Client["createPasskeyWallet"]>>;
       try {
         w = await sdkClient().createPasskeyWallet({

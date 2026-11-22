@@ -6,6 +6,10 @@
  *   fresh (default) | funded | active | empty | stopped | stray | error | loading
  *   | device-bound        a funded wallet whose passkey is device-bound (not discoverable): the UI should ask for the backup code
  *   | fresh-device-bound  no wallet yet; creating one makes a device-bound passkey
+ *   | fresh-fallback      no wallet yet; the normal passkey request fails as "cancelled" (the phone only offered
+ *                         another device) and "Use this phone's screen lock instead" (mode "device") succeeds
+ *
+ * createWallet({ mode: "device" }) always makes a device-bound passkey, as the live client does.
  *
  * Optional `&passkeyError=<reason>` makes createWallet and restoreWallet fail with that PasskeyError reason:
  *   cancelled | wrong-site | already-exists | interrupted | unsupported
@@ -127,7 +131,7 @@ function makePlan(input: Omit<PlanInput, "expiresAt">, startedAt: Date, nextPurc
 
 function scenario(name: string): AutumnState {
   const s = emptyState();
-  if (name === "fresh" || name === "fresh-device-bound" || name === "error" || name === "loading") return s;
+  if (name === "fresh" || name === "fresh-device-bound" || name === "fresh-fallback" || name === "error" || name === "loading") return s;
   const now = Date.now();
   s.wallet = { address: PREVIEW_ADDRESS, createdAt: new Date(now - 40 * DAY), passkey: { discoverable: name === "device-bound" ? false : true } };
   s.registration = { walletRegistered: false, nextGrantFeeCelo: FEE, perKeyFeeCelo: FEE / 2n };
@@ -263,10 +267,12 @@ export function createPreviewClient(): AutumnClient {
         }
       };
     },
-    async createWallet() {
+    async createWallet(options) {
+      const device = options?.mode === "device";
       await wait(1200);
       failPasskey("create");
-      const wallet: Wallet = { address: PREVIEW_ADDRESS, createdAt: new Date(), passkey: { discoverable: createdDiscoverable } };
+      if (name === "fresh-fallback" && !device) throw passkeyFailure({ name: "NotAllowedError", message: "preview" }, "create")!;
+      const wallet: Wallet = { address: PREVIEW_ADDRESS, createdAt: new Date(), passkey: { discoverable: device ? false : createdDiscoverable } };
       state = {
         ...state,
         wallet,

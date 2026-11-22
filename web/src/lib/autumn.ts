@@ -20,9 +20,9 @@ import {
   type SendAsset,
 } from "@autumn/core";
 import { publicConfig } from "./env";
-import type { Discoverable } from "./passkey";
+import type { CreationMode, Discoverable } from "./passkey";
 
-export { PasskeyError, type PasskeyFailureReason, type PasskeyStep, type Discoverable } from "./passkey";
+export { PasskeyError, type PasskeyFailureReason, type PasskeyStep, type Discoverable, type CreationMode } from "./passkey";
 export { BackupCodeError, BACKUP_CODE_PREFIX } from "./backupCode";
 
 export type { PlanPeriod, SendAsset };
@@ -281,8 +281,10 @@ export interface AutumnClient {
    * Create the wallet with a passkey. Rejects with a `PasskeyError` (`reason` and a short plain `message`) when the
    * passkey prompt fails, is cancelled or passkeys are unsupported; other errors (relay, network) are plain Errors.
    * Afterwards `wallet.passkey.discoverable` says whether the owner must save the backup code.
+   * `mode` "auto" (default) picks the request from the browser's capabilities; "device" always asks for a passkey on
+   * this device behind its screen lock (device-bound, not discoverable unless the browser says otherwise).
    */
-  createWallet(): Promise<Wallet>;
+  createWallet(options?: { mode?: CreationMode }): Promise<Wallet>;
   /**
    * Find an existing wallet from a discoverable passkey saved on this device (works once the wallet has made a
    * transaction). Rejects with a `PasskeyError` when the prompt fails. Cannot find a device-bound
