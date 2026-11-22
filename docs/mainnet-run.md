@@ -19,7 +19,7 @@ by item:
 | 2 | `grantSession` with a session key known only by its public key (`sessionSignerFromPublicKey`) | **Proven with a private-key admin** (grant `0xfef8bc0d…263b`). From a passkey: grant `0xd1f9795a…be75` and revoke `0x67fc22a9…1dce` of the passkey wallet ([mainnet-results.md, "Passkey wallet"](mainnet-results.md#passkey-wallet)) |
 | 3 | The KeyStore fee charged in CELO, and the relay's quote against 2 × fee × 1.1 | **Proven.** The quote's value, 20.3387 CELO, equals 2 × 9.2449 × 1.1; 18.4898 CELO was kept after the refund |
 | 4 | The account storing exactly our cap, period, allowlist (with the Orchestrator entry) and expiry | **Proven.** `sessionLimitsMismatch` none |
-| 5 | `registerAgentIdentity` (ERC-8004) | **Proven for the private-key wallet** (agent id 10096). Not proven for a passkey wallet |
+| 5 | `registerAgentIdentity` (ERC-8004) | **Proven** for the private-key wallet (agent id 10096) and for the passkey wallet (agent id 10097, `0x446c0bd4…aabe`) |
 | 6 | A purchase through `GoldBuyer.buy` sent by the relay with our session key | **Proven** (`0xe6f4f902…c785`) |
 | 7 | The relay fee drawn from the session's USD₮ cap, and its size | **Proven.** 0.00974 USD₮; session spend 1.00974 of 1.05 USD₮ |
 | 8 | The relay's refusal over the cap and after a revoke, and the SDK codes | **Proven.** `spend_limit_exceeded`; after the revoke `unknown` ("key hash … is unknown"), which Autumn classifies as `session_ended`. A call outside the allowlist gave `call_not_permitted` |

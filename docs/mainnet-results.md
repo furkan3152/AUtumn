@@ -68,4 +68,7 @@ WebAuthn P-256 key (`getKeys()`, read 22 Nov 2026). Its grant is
 (block 83,444,500) and its revoke is
 [`0x67fc22a9…1dce`](https://celoscan.io/tx/0x67fc22a957a6cc97ae27d57752c233124f7bc36c3770e91a0eed7b81c11b1dce)
 (block 83,444,858); both were approved with the passkey and emitted events
-from the wallet itself.
+from the wallet itself. The wallet registered its ERC-8004
+identity with the passkey: agent id 10097,
+[`0x446c0bd4…aabe`](https://celoscan.io/tx/0x446c0bd4f4bb5cb2ee5b50141e3a1a2a1864b4d55fd70bff736f865c0d15aabe)
+(block 83,455,994), https://8004scan.io/agents/celo/10097.
