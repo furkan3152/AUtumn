@@ -15,3 +15,4 @@ export * from "./fees.js";
 export * from "./intent.js";
 export * from "./attribution.js";
 export * from "./prepared.js";
+export * from "./swap.js";

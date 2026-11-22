@@ -1,0 +1,216 @@
+/**
+ * The CELO → USD₮ conversion ("Convert CELO to USD₮" in the app) on a local
+ * anvil fork of Celo mainnet. No real funds and no mainnet transaction: every
+ * write goes to the local fork. Skipped when anvil is not installed.
+ *
+ * It sets up an Altana wallet the way mainnet has one (EIP-7702 delegation to
+ * the real Altana account proxy, a super-admin key standing in for the
+ * passkey) holding only CELO, and sends core's two conversion calls as admin
+ * intents through the real Orchestrator, as Altana's relay does:
+ *   1. the wallet's first transaction: the KeyStore registration of its own key
+ *      (what the SDK prepends to a first admin action), then the approve and
+ *      the swap;
+ *   2. a second conversion, approve and swap only.
+ * Each must deliver at least the floor in USD₮ to the wallet, take exactly the
+ * amount of CELO, pass core's receipt check, and leave the router's
+ * allowance at zero. A third intent with a floor above the quote must change
+ * nothing.
+ *
+ * anvil runs with --celo: CELO's ERC-20 (GoldToken) moves native balance
+ * through Celo's transfer precompile, which plain anvil lacks.
+ *
+ * Env: ANVIL_BIN (default ~/.foundry/bin/anvil or PATH), FORK_URL (default forno), FORK_BLOCK (default a few blocks behind the head).
+ */
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import {
+  createPublicClient,
+  createWalletClient,
+  encodeAbiParameters,
+  encodeFunctionData,
+  http,
+  keccak256,
+  pad,
+  padHex,
+  parseAbi,
+  parseEventLogs,
+  toHex,
+  type Address,
+  type Hex,
+  type PublicClient,
+} from "viem";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { celo } from "viem/chains";
+import { signerFromPrivateKey } from "@altananetwork/sdk";
+import {
+  ALTANA_ACCOUNT_PROXY,
+  ALTANA_KEYSTORE_CONTROLLER,
+  ALTANA_ORCHESTRATOR,
+  CELO_TOKEN,
+  SWAP_ROUTER_02,
+  USDT,
+  buildSessionIntent,
+  buildSwapCalls,
+  celoToUsdt,
+  checkSwapLogs,
+  createCeloPublicClient,
+  decodeSwapCalls,
+  directLaneSeqKey,
+  executeCalldata,
+  intentDigest,
+  ithacaAccountNonceAbi,
+  orchestratorAbi,
+  pinnedBlock,
+  quoteCeloToUsdt,
+  wrapKeySignature,
+  type Call,
+} from "@autumn/core";
+
+function findAnvil(): string | undefined {
+  const candidates = [process.env.ANVIL_BIN, join(homedir(), ".foundry/bin/anvil")].filter(Boolean) as string[];
+  for (const c of candidates) if (existsSync(c)) return c;
+  const w = spawnSync("sh", ["-c", "command -v anvil"], { encoding: "utf8" });
+  return w.status === 0 && w.stdout.trim() ? w.stdout.trim() : undefined;
+}
+const ANVIL = findAnvil();
+
+const accountAbi = parseAbi([
+  "function execute(bytes32 mode, bytes executionData) payable",
+  "function authorize((uint40 expiry, uint8 keyType, bool isSuperAdmin, bytes publicKey) key) returns (bytes32)",
+]);
+const controllerAbi = parseAbi([
+  "function initialRegisterKey(bytes32 keyId, address validator, bytes metadata, bytes publicKey, uint40 expiry) payable",
+  "function getRegistrationFeeInWei() view returns (uint256)",
+]);
+const erc20 = parseAbi(["function balanceOf(address) view returns (uint256)", "function allowance(address, address) view returns (uint256)"]);
+const MODE_BATCH = pad("0x01", { dir: "right", size: 32 });
+const CELO = 10n ** 18n;
+
+describe.skipIf(!ANVIL)("CELO → USD₮ conversion from an Altana wallet on a Celo mainnet fork", () => {
+  let anvil: ChildProcess;
+  let rpc: string;
+  let pub: PublicClient;
+  let core: ReturnType<typeof createCeloPublicClient>;
+  const funderPk = generatePrivateKey(); // submits the admin intents, as the relay would
+
+  const rpcCall = async (method: string, params: unknown[]) => pub.request({ method: method as never, params: params as never });
+  const nowTs = async () => (await pub.getBlock({ blockTag: "latest" })).timestamp;
+  const usdtOf = (a: Address) => pub.readContract({ address: USDT, abi: erc20, functionName: "balanceOf", args: [a] });
+  const allowanceOf = (a: Address, blockNumber?: bigint) =>
+    pub.readContract({ address: CELO_TOKEN, abi: erc20, functionName: "allowance", args: [a, SWAP_ROUTER_02], ...(blockNumber ? { blockNumber } : {}) });
+  const keyHashOf = (address: Address) =>
+    keccak256(encodeAbiParameters([{ type: "uint8" }, { type: "bytes32" }], [2, keccak256(padHex(address, { size: 32 }))]));
+
+  async function adminIntent(wallet: Address, adminPk: Hex, calls: Call[]) {
+    const admin = signerFromPrivateKey(adminPk);
+    const keyHash = keyHashOf(admin.address);
+    const nonce = await pub.readContract({ address: wallet, abi: ithacaAccountNonceAbi, functionName: "getNonce", args: [directLaneSeqKey(keyHash)] });
+    const { intent } = buildSessionIntent({ wallet, calls, nonce, combinedGas: 2_000_000n, expiry: (await nowTs()) + 600n });
+    intent.signature = wrapKeySignature(await admin.signDigest(intentDigest({ ...intent, calls })), keyHash);
+    const w = createWalletClient({ chain: celo, transport: http(rpc), account: privateKeyToAccount(funderPk) });
+    const hash = await w.sendTransaction({ to: ALTANA_ORCHESTRATOR, data: executeCalldata(intent, null), chain: celo });
+    const receipt = await pub.waitForTransactionReceipt({ hash });
+    const ev = parseEventLogs({ abi: orchestratorAbi, eventName: "IntentExecuted", logs: receipt.logs });
+    return { receipt, err: ev.at(-1)?.args.err };
+  }
+
+  beforeAll(async () => {
+    const port = 20_000 + Math.floor(Math.random() * 2000);
+    rpc = `http://127.0.0.1:${port}`;
+    const args = ["--fork-url", process.env.FORK_URL ?? "https://forno.celo.org", "--celo", "--hardfork", "prague", "--port", String(port), "--silent", "--prune-history", "400", "--timeout", "15000", "--retries", "8"];
+    // forno's nodes lag each other by a block or two: fork a few blocks behind the head, not "latest".
+    const forkBlock = process.env.FORK_BLOCK ?? String(await pinnedBlock(createCeloPublicClient(process.env.FORK_URL)));
+    args.push("--fork-block-number", forkBlock);
+    let anvilErr = "";
+    anvil = spawn(ANVIL!, args, { stdio: ["ignore", "ignore", "pipe"] });
+    anvil.stderr?.on("data", (d) => (anvilErr += String(d)));
+    pub = createPublicClient({ chain: celo, transport: http(rpc, { retryCount: 0, timeout: 5_000 }) }) as PublicClient;
+    for (let i = 0; ; i++) {
+      try {
+        await pub.getChainId();
+        break;
+      } catch {
+        if (i > 120 || anvil.exitCode !== null) throw new Error(`anvil did not start: ${anvilErr.slice(0, 500)}`);
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+    pub = createPublicClient({ chain: celo, transport: http(rpc, { timeout: 60_000 }) }) as PublicClient;
+    core = createCeloPublicClient(rpc);
+    await rpcCall("anvil_setBalance", [privateKeyToAccount(funderPk).address, toHex(100n * CELO)]);
+  }, 150_000);
+
+  afterAll(() => {
+    anvil?.kill("SIGKILL");
+  });
+
+  it("converts with an exact approval, delivers at least the floor and leaves no allowance", async () => {
+    // A wallet holding only CELO, delegated to Altana's account, with an admin key.
+    const owner = privateKeyToAccount(generatePrivateKey());
+    const adminPk = generatePrivateKey();
+    const admin = privateKeyToAccount(adminPk);
+    const wallet = owner.address;
+    await rpcCall("anvil_setBalance", [wallet, toHex(60n * CELO)]);
+    expect(await pub.readContract({ address: CELO_TOKEN, abi: erc20, functionName: "balanceOf", args: [wallet] })).toBe(60n * CELO);
+    expect(await usdtOf(wallet)).toBe(0n);
+    const ownerClient = createWalletClient({ chain: celo, transport: http(rpc), account: owner });
+    const authorization = await ownerClient.signAuthorization({ contractAddress: ALTANA_ACCOUNT_PROXY, executor: "self" });
+    const authorize = encodeFunctionData({ abi: accountAbi, functionName: "authorize", args: [{ expiry: 0, keyType: 2, isSuperAdmin: true, publicKey: padHex(admin.address, { size: 32 }) }] });
+    const execData = encodeAbiParameters([{ type: "tuple[]", components: [{ name: "to", type: "address" }, { name: "value", type: "uint256" }, { name: "data", type: "bytes" }] }], [[{ to: wallet, value: 0n, data: authorize }]]);
+    const h = await ownerClient.sendTransaction({ chain: celo, to: wallet, authorizationList: [authorization], data: encodeFunctionData({ abi: accountAbi, functionName: "execute", args: [MODE_BATCH, execData] }) });
+    expect((await pub.waitForTransactionReceipt({ hash: h })).status).toBe("success");
+    expect(await pub.getCode({ address: wallet })).toBe(`0xef0100${ALTANA_ACCOUNT_PROXY.slice(2).toLowerCase()}`);
+
+    const convert = async (amountIn: bigint, prepend: Call[] = []) => {
+      const q = await quoteCeloToUsdt(core, amountIn, { blockNumber: await pub.getBlockNumber() });
+      expect(q.ok).toBe(true);
+      if (!q.ok) throw new Error(q.reason);
+      const calls = buildSwapCalls(wallet, amountIn, q.minOut);
+      expect(decodeSwapCalls(calls, wallet)).toEqual({ amountIn, minOut: q.minOut });
+      const celo0 = await pub.getBalance({ address: wallet });
+      const usdt0 = await usdtOf(wallet);
+      const { receipt, err } = await adminIntent(wallet, adminPk, [...prepend, ...calls]);
+      expect(receipt.status).toBe("success");
+      expect(err).toBe("0x00000000");
+      const check = checkSwapLogs(receipt.logs, { wallet, amountIn, minOut: q.minOut });
+      expect(check.ok).toBe(true);
+      const got = (await usdtOf(wallet)) - usdt0;
+      expect(got).toBeGreaterThanOrEqual(q.minOut);
+      expect(check.ok && check.usdtOut).toBe(got);
+      expect(await allowanceOf(wallet, receipt.blockNumber)).toBe(0n);
+      const celoSpent = celo0 - (await pub.getBalance({ address: wallet }));
+      const prependValue = prepend.reduce((s, c) => s + c.value, 0n);
+      // The wallet pays no gas (the submitter does); registration excess is refunded by the controller.
+      expect(celoSpent).toBeGreaterThanOrEqual(amountIn);
+      expect(celoSpent).toBeLessThanOrEqual(amountIn + prependValue);
+      console.log("fork conversion", { amountIn, quoted: q.quotedOut, minOut: q.minOut, got, reference: celoToUsdt(amountIn, q.rate), celoSpent, gasUsed: receipt.gasUsed });
+      return { q, got };
+    };
+
+    // 1. First passkey transaction: registers the wallet's own key, then converts.
+    const fee = await pub.readContract({ address: ALTANA_KEYSTORE_CONTROLLER, abi: controllerAbi, functionName: "getRegistrationFeeInWei" });
+    const register: Call = {
+      to: ALTANA_KEYSTORE_CONTROLLER,
+      value: (fee * 110n) / 100n,
+      data: encodeFunctionData({ abi: controllerAbi, functionName: "initialRegisterKey", args: [keccak256(admin.publicKey), "0x0000000000000000000000000000000000000000", "0x", admin.publicKey, 0] }),
+    };
+    await convert(25n * CELO, [register]);
+
+    // 2. A later conversion.
+    await convert(5n * CELO + CELO / 2n);
+
+    // 3. A floor above what the pool gives: the intent fails, nothing moves, no allowance is left.
+    const amountIn = CELO;
+    const q = await quoteCeloToUsdt(core, amountIn, { blockNumber: await pub.getBlockNumber() });
+    const celo0 = await pub.getBalance({ address: wallet });
+    const usdt0 = await usdtOf(wallet);
+    const { receipt, err } = await adminIntent(wallet, adminPk, buildSwapCalls(wallet, amountIn, q.quotedOut * 2n));
+    expect(err).not.toBe("0x00000000");
+    expect(checkSwapLogs(receipt.logs, { wallet, amountIn, minOut: q.quotedOut * 2n })).toMatchObject({ ok: false });
+    expect(await pub.getBalance({ address: wallet })).toBe(celo0);
+    expect(await usdtOf(wallet)).toBe(usdt0);
+    expect(await allowanceOf(wallet)).toBe(0n);
+  }, 240_000);
+});

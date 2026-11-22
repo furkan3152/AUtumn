@@ -11,15 +11,16 @@ import { Deposit } from "./screens/Deposit";
 import { PlanPicker } from "./screens/PlanPicker";
 import { Home } from "./screens/Home";
 import { SendOut } from "./screens/SendOut";
+import { ConvertCelo } from "./screens/ConvertCelo";
 import { BackupCode } from "./screens/BackupCode";
 import { errorText } from "@/lib/useAutumn";
 import { TxLink } from "./ui";
 import type { TxHash } from "@/lib/autumn";
 
-type View = "auto" | "deposit" | "plan" | "send" | "backup" | "backup-new";
+type View = "auto" | "deposit" | "plan" | "send" | "convert" | "backup" | "backup-new";
 
 /** Screens kept in the address (?screen=…) so Back returns to Home and a reload stays put. Never a half-done step. */
-const URL_VIEWS: readonly View[] = ["deposit", "plan", "send", "backup"];
+const URL_VIEWS: readonly View[] = ["deposit", "plan", "send", "convert", "backup"];
 const viewFromUrl = (): View => {
   const v = new URLSearchParams(window.location.search).get("screen") as View | null;
   return v && URL_VIEWS.includes(v) ? v : "auto";
@@ -159,16 +160,18 @@ function Screen({
   hasPlan: boolean;
 }) {
   const onSendOut = () => setView("send");
+  const onConvert = () => setView("convert");
   const onBackupCode = () => setView("backup");
   const deviceBound = state.wallet?.passkey.discoverable !== true;
   if (view === "backup-new") return <BackupCode client={client} onDone={back} deviceBound={deviceBound} />;
   if (view === "backup") return <BackupCode client={client} onDone={back} onBack={back} deviceBound={deviceBound} />;
   if (view === "send") return <SendOut client={client} state={state} onBack={back} {...(state.plan ? { goldBuyer: state.plan.proof.calls[1]!.contract } : {})} />;
-  if (view === "deposit") return <Deposit client={client} state={state} onBack={back} onSendOut={onSendOut} onBackupCode={onBackupCode} />;
+  if (view === "convert") return <ConvertCelo client={client} state={state} onBack={back} />;
+  if (view === "deposit") return <Deposit client={client} state={state} onBack={back} onSendOut={onSendOut} onConvert={onConvert} onBackupCode={onBackupCode} />;
   if (view === "plan" && isFunded(state)) return <PlanPicker client={client} state={state} onDone={back} onBack={back} />;
   if (view === "plan")
-    return <Deposit client={client} state={state} onContinue={() => setView("plan")} onBack={back} onSendOut={onSendOut} onBackupCode={onBackupCode} forNewPlan={hasPlan} />;
-  if (!hasPlan) return <Deposit client={client} state={state} onContinue={() => setView("plan")} onSendOut={onSendOut} onBackupCode={onBackupCode} />;
+    return <Deposit client={client} state={state} onContinue={() => setView("plan")} onBack={back} onSendOut={onSendOut} onConvert={onConvert} onBackupCode={onBackupCode} forNewPlan={hasPlan} />;
+  if (!hasPlan) return <Deposit client={client} state={state} onContinue={() => setView("plan")} onSendOut={onSendOut} onConvert={onConvert} onBackupCode={onBackupCode} />;
 
   return (
     <Home
@@ -177,6 +180,7 @@ function Screen({
       onAddMoney={() => setView("deposit")}
       onNewPlan={() => setView("plan")}
       onSendOut={onSendOut}
+      onConvert={onConvert}
       onBackupCode={onBackupCode}
     />
   );

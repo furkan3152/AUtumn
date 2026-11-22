@@ -1,6 +1,6 @@
 "use client";
 
-import { addressUrl, isFunded, type AutumnClient, type AutumnState } from "@/lib/autumn";
+import { addressUrl, hasSpareCelo, isFunded, type AutumnClient, type AutumnState } from "@/lib/autumn";
 import { celo, formatDateTime, usdt } from "@/lib/format";
 import { CostsList } from "../Costs";
 import { BackupChip, Button, CopyButton, ExtLink, Label, Panel, Qr, ScreenHead, Spinner, Trail, isDeviceBound } from "../ui";
@@ -12,6 +12,7 @@ export function Deposit({
   onContinue,
   onBack,
   onSendOut,
+  onConvert,
   onBackupCode,
   forNewPlan,
 }: {
@@ -22,6 +23,8 @@ export function Deposit({
   onContinue?: () => void;
   onBack?: () => void;
   onSendOut?: () => void;
+  /** Convert some CELO to USD₮: offered when the wallet holds CELO beyond what the next plan's registration needs. */
+  onConvert?: () => void;
   onBackupCode?: () => void;
 }) {
   const wallet = state.wallet!;
@@ -103,7 +106,7 @@ export function Deposit({
       </div>
 
       <Panel title="What to send" icon="coin">
-        <CostsList registration={reg} fees={state.fees} />
+        <CostsList registration={reg} fees={state.fees} canConvert />
         <p className="note">Send on the Celo network only. Funds sent on another network may be lost.</p>
       </Panel>
       </div>
@@ -128,6 +131,12 @@ export function Deposit({
         <p className="waiting" role="status">
           <Spinner /> This page updates by itself when your deposit arrives.
         </p>
+      ) : null}
+
+      {onConvert && hasSpareCelo(state) ? (
+        <Button variant={funded ? "plain" : "primary"} block onClick={onConvert}>
+          Convert CELO to USD₮
+        </Button>
       ) : null}
 
       {onSendOut && (b?.usdt || b?.gold || b?.celo) ? (

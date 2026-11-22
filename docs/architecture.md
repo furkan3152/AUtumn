@@ -54,7 +54,7 @@ A leaked session key could therefore send up to the cap's remaining room as
 |---|---|---|---|---|
 | Purchase (`direct-prepared`, the live deployment) | the session key, over the intent Altana's relay prepared | Autumn's agent wallet [`0x0b5B…a9Dd`](https://celoscan.io/address/0x0b5B7ec235F2291396c63F4afc96599B4F70a9Dd), with our ERC-8021 tag as the last bytes of the calldata | the agent wallet, in CELO (Autumn sponsors it) | the owner's wallet pays Altana's fee in USD₮, inside the cap, to Altana's fee recipient `0xaF08…C4bC` |
 | Purchase (`relay`, the default in code) | the session key | Altana's relay | Altana's relay | the owner's wallet pays the relay's fee in USD₮, inside the cap |
-| Grant, revoke, identity registration, "Send out" | the owner's passkey | Altana's relay | Altana's relay | the owner's wallet pays the relay's fee, in USD₮ or CELO; the first grant also pays the KeyStore registration in CELO |
+| Grant, revoke, identity registration, "Send out", "Convert CELO to USD₮" | the owner's passkey | Altana's relay | Altana's relay | the owner's wallet pays the relay's fee, in USD₮ or CELO; the first grant also pays the KeyStore registration in CELO |
 
 The agent wallet is also the address registered with the hackathon entry
 and holds ERC-8004 agent id 10098. Submitting needs no authority over the
@@ -71,6 +71,20 @@ report a 30-minute average, `buy` reverts ("OLD"); the runner reports
 "Price check not available right now" and retries on a later run in the
 period. The pool's observation capacity was raised from 1 to 1,800 on
 22 Nov 2026 ([README, "Deployed on Celo mainnet"](../README.md#deployed-on-celo-mainnet)).
+
+## Converting CELO to USD₮
+
+The owner can swap part of the wallet's CELO for USD₮ (`core/src/swap.ts`,
+`web/src/components/screens/ConvertCelo.tsx`). It is one passkey-signed batch
+sent by Altana's relay: `CELO.approve(SwapRouter02, amount)` and
+`exactInputSingle` on Uniswap v3's CELO/USD₮ 0.01% pool, paying the wallet
+itself. The app takes QuoterV2's quote, refuses when it is more than 3% below
+the CELO rate in Celo's FeeCurrencyDirectory (the rate used to show CELO in
+dollars), and sets the minimum output 1% below the quote; it quotes again
+before signing. Afterwards it checks the pool's transfers in the receipt and
+that the router's allowance is back to zero. Max keeps the next plan's
+KeyStore registration, 10% spare, and this transaction's own CELO fee and
+registration. This is not an agent action and the session key cannot do it.
 
 ## The session key's allowlist
 

@@ -45,6 +45,7 @@ export function Home({
   onAddMoney,
   onNewPlan,
   onSendOut,
+  onConvert,
   onBackupCode,
 }: {
   client: AutumnClient;
@@ -52,6 +53,7 @@ export function Home({
   onAddMoney: () => void;
   onNewPlan: () => void;
   onSendOut: () => void;
+  onConvert: () => void;
   onBackupCode: () => void;
 }) {
   const now = useNow();
@@ -223,6 +225,11 @@ export function Home({
           <Button variant="plain" onClick={onSendOut}>
             Send out
           </Button>
+          {b && b.celo > 0n && (
+            <Button variant="plain" onClick={onConvert}>
+              Convert CELO to USD₮
+            </Button>
+          )}
         </div>
       </Panel>
 

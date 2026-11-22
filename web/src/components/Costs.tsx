@@ -13,9 +13,10 @@ export const celoInUsdt = (wei: bigint, fees: FeeFacts) => (wei * fees.usdtPerCe
  * What to send and what it costs, in plain words: a suggested USD₮ deposit,
  * the CELO the registration needs (with its dollar value from the onchain
  * rate), the two passkey prompts, and that stopping and sending out cost a
- * passkey approval and a small fee.
+ * passkey approval and a small fee. With `canConvert` (the wallet's own
+ * Add money screen) it also says that CELO alone is enough to start.
  */
-export function CostsList({ registration, fees }: { registration: Registration | null; fees: FeeFacts | null }) {
+export function CostsList({ registration, fees, canConvert = false }: { registration: Registration | null; fees: FeeFacts | null; canConvert?: boolean }) {
   const first = registration ? registration.nextGrantFeeCelo : null;
   const later = registration ? registration.perKeyFeeCelo : null;
   const usd = (wei: bigint) => (fees ? ` (${approxUsd(celoInUsdt(wei, fees))} at today's price)` : "");
@@ -49,6 +50,15 @@ export function CostsList({ registration, fees }: { registration: Registration |
         )}
         </span>
       </li>
+      {canConvert && (
+        <li>
+          <Icon name="coin" />
+          <span>
+            <strong>Only have CELO?</strong> You can send only CELO and convert part of it to USD₮ here. Autumn keeps the CELO a plan needs for the
+            registration.
+          </span>
+        </li>
+      )}
       <li>
         <Icon name="passkey" />
         <span>Starting a plan asks for your passkey twice: once to grant the agent its limits, once for its onchain identity (ERC-8004).</span>

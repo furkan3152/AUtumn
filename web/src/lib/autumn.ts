@@ -14,7 +14,10 @@ import {
   ALTANA_EXPLORER,
   USDT as USDT_TOKEN,
   maxSendable,
+  maxSwappable,
+  celoToKeep,
   DEFAULT_FEE_ALLOWANCE_PER_BUY,
+  type SwapKeep,
   PLAN_DURATION_SECS,
   PLAN_DURATION_WEEKS,
   nextPeriodStart,
@@ -27,7 +30,7 @@ import type { CreationMode, Discoverable } from "./passkey";
 export { PasskeyError, isAndroid, type PasskeyFailureReason, type PasskeyStep, type Discoverable, type CreationMode } from "./passkey";
 export { BackupCodeError, BACKUP_CODE_PREFIX } from "./backupCode";
 
-export type { PlanPeriod, SendAsset };
+export type { PlanPeriod, SendAsset, SwapKeep };
 export { PLAN_DURATION_WEEKS };
 
 export type Address = `0x${string}`;
@@ -60,7 +63,7 @@ export const agentScanUrl = (agentId: string) => `https://8004scan.io/agents/cel
 export class CheckAgainError extends Error {
   readonly name = "CheckAgainError";
   constructor(
-    readonly action: "plan" | "stop" | "send",
+    readonly action: "plan" | "stop" | "send" | "swap",
     message: string,
     readonly ref: { txHash?: TxHash; callsId?: string } = {},
   ) {
@@ -365,6 +368,108 @@ export interface AutumnClient {
   send(req: SendRequest): Promise<SendResult>;
   /** "Check again" after send's CheckAgainError: reads the transfer's status, never sends. */
   checkSend(req: SendRequest, ref: { txHash?: TxHash; callsId?: string }): Promise<SendResult>;
+  /**
+   * Quote converting `amount` CELO to USD₮ (nothing is signed): the pool's quote checked against Celo's reference
+   * rate, the minimum, the relay's fee and what Max keeps. Without `amount` a stand-in amount is quoted, for the fee
+   * and Max. Rejects with SwapUnavailableError when the rate or the quote cannot be read or the price is refused.
+   */
+  quoteSwap(req: { amount?: bigint }): Promise<SwapQuote>;
+  /**
+   * Convert with the passkey. Re-quotes first and refuses (nothing signed) when the price check fails or the pool now
+   * gives less than `minOut`. Resolves once the chain shows the conversion and balances are re-read. Rejects with
+   * CheckAgainError (never "not converted") once it may be on its way. A second call while one runs returns the same
+   * promise.
+   */
+  swap(req: SwapRequest): Promise<SwapResult>;
+  /** "Check again" after swap's CheckAgainError: reads the conversion's status, never sends. */
+  checkSwap(req: SwapRequest, ref: { txHash?: TxHash; callsId?: string }): Promise<SwapResult>;
+}
+
+/* ---------- Converting CELO to USD₮ ---------- */
+
+/**
+ * Converting is not possible right now: the reference rate or the pool's quote could not be read (`kind`
+ * "unreadable"), or the quote is too far below the reference rate ("price"). Nothing was signed or sent.
+ */
+export class SwapUnavailableError extends Error {
+  readonly name = "SwapUnavailableError";
+  constructor(
+    readonly kind: "unreadable" | "price",
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export interface SwapQuote {
+  /** CELO wei quoted. When `probe` is true this is a stand-in amount (no amount entered yet): use the quote for its fee and Max only. */
+  amountIn: bigint;
+  probe: boolean;
+  /** USD₮ base units the pool's quoter says the swap returns now. */
+  expectedOut: bigint;
+  /** The least the swap may return (the quote less 1%); below that it reverts and converts nothing. */
+  minOut: bigint;
+  /** USD₮ base units the amount is worth at Celo's reference rate. */
+  referenceOut: bigint;
+  /** How far the quote is below the reference rate, in basis points (negative: above). */
+  belowReferenceBps: number;
+  /** The relay's maximum fee for this conversion, in `feeSymbol` base units. */
+  fee: bigint;
+  feeSymbol: "USD₮" | "CELO";
+  /** CELO this transaction also carries: Altana's one-time registration on a wallet's first passkey transaction. */
+  registrationCelo: bigint;
+  /** CELO left in the wallet by Max, and why. */
+  keep: SwapKeep;
+  /** The most CELO Max converts. */
+  max: bigint;
+  observedAt: Date;
+}
+
+export interface SwapRequest {
+  /** CELO wei to convert. */
+  amountIn: bigint;
+  /** The least USD₮ (base units) the owner accepted on the review screen. */
+  minOut: bigint;
+  /** The fee token shown on the review screen. */
+  feeSymbol: "USD₮" | "CELO";
+}
+
+export interface SwapResult {
+  txHash: TxHash;
+  /** USD₮ base units the pool paid to the wallet. */
+  received: bigint;
+  /** CELO the router may still take from the wallet after the swap (0 when the exact approval was used up). */
+  allowanceLeft: bigint;
+  /** Balances read after the chain confirmed the conversion. */
+  balances: Balances;
+}
+
+/** How long a conversion quote is shown as current. After this the review asks for a new quote. */
+export const SWAP_QUOTE_FRESH_MS = 60_000;
+
+/** The pool, in one line for the screen. */
+export const SWAP_ROUTE_TEXT = "This is a swap on Uniswap v3's CELO/USD₮ pool on Celo (pool fee 0.01%).";
+
+/** The CELO Max keeps and the most it converts, from the balance shown now and this quote's fee. */
+export function swapKeepAndMax(celoBalance: bigint, registration: Pick<Registration, "walletRegistered" | "perKeyFeeCelo">, quote: Pick<SwapQuote, "fee" | "feeSymbol" | "registrationCelo">) {
+  const keep = celoToKeep({
+    walletRegistered: registration.walletRegistered,
+    perKeyFee: registration.perKeyFeeCelo,
+    swapRegistration: quote.registrationCelo,
+    swapFeeCelo: quote.feeSymbol === "CELO" ? quote.fee : 0n,
+  });
+  return { keep, max: maxSwappable(celoBalance, keep) };
+}
+
+/**
+ * Whether the wallet holds CELO beyond what the next plan's registration needs (with the same 10% spare Max keeps):
+ * the Add money screen then offers to convert some.
+ */
+export function hasSpareCelo(state: AutumnState): boolean {
+  const b = state.balances;
+  const r = state.registration;
+  if (!b || !r) return false;
+  return b.celo > r.nextGrantFeeCelo + r.perKeyFeeCelo / 10n;
 }
 
 /* ---------- Plan rules shared by every implementation ---------- */

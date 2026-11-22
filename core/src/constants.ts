@@ -21,6 +21,20 @@ export const XAUT0_DECIMALS = 6;
 export const USDT_XAUT0_POOL: Address = "0xbb469A28f64C72aECC7d05Ca6e45B2FB1a63B4F9";
 export const POOL_FEE = 3000 as const;
 
+/**
+ * CELO is also an ERC-20 on Celo (GoldToken): its balance is the account's
+ * native balance. 18 decimals. Read 2026-11-22: symbol "CELO", decimals 18.
+ */
+export const CELO_TOKEN: Address = "0x471EcE3750Da237f93B8E339c536989b8978a438";
+
+/**
+ * Uniswap V3 CELO/USD₮ 0.01% pool: token0 = CELO, token1 = USD₮, fee 100.
+ * Read 2026-11-22: factory.getPool(CELO, USD₮, 100) returns this address, and
+ * the pool reports these tokens and this fee.
+ */
+export const CELO_USDT_POOL: Address = "0x6cde5f5a192fBf3fD84df983aa6DC30dbd9f8Fac";
+export const CELO_USDT_POOL_FEE = 100 as const;
+
 export const UNISWAP_V3_FACTORY: Address = "0xAfE208a311B21f13EF87E33A90049fC17A7acDEc";
 export const SWAP_ROUTER_02: Address = "0x5615CDAb10dc425a742d643d949a7F474C01abc4";
 export const QUOTER_V2: Address = "0x82825d0554fA07f7FC52Ab63c961F330fdEFa8E8";
