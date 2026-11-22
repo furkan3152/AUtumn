@@ -39,7 +39,21 @@ const tests = [
   ["5. Saved passkey preferred", () => base({ authenticatorSelection: { residentKey: "preferred", requireResidentKey: false, userVerification: "required" }, extensions: { credProps: true } })],
   ["6. Saved passkey required (platform)", () => base({ authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "required", requireResidentKey: true, userVerification: "required" } })],
   ["7. Same as 2, also accepting RS256", () => { const o = base({ authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "discouraged", requireResidentKey: false, userVerification: "required" } }); o.publicKey.pubKeyCredParams.push({ type: "public-key", alg: -257 }); return o; }],
+  ["8. The request the app sends for this phone's screen lock", () => appLike()],
+  ["9. Same as 8, sent four seconds after the tap", async () => { await new Promise((r) => setTimeout(r, 4000)); return appLike(); }],
+  ["10. Same as 8, saved passkey preferred (the app's main button)", () => { const o = appLike(); o.publicKey.authenticatorSelection = { residentKey: "preferred", requireResidentKey: false, userVerification: "required" }; return o; }],
 ];
+function appLike() {
+  return { publicKey: {
+    attestation: "none",
+    authenticatorSelection: { residentKey: "discouraged", requireResidentKey: false, authenticatorAttachment: "platform", userVerification: "required" },
+    challenge: Uint8Array.from([105, 171, 180, 181, 160, 222, 75, 198, 42, 42, 32, 31, 141, 37, 186, 233]),
+    pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+    rp: { id: location.hostname, name: location.hostname },
+    user: { id: rand(20), name: "Autumn", displayName: "Autumn" },
+    extensions: { credProps: true },
+  } };
+}
 const box = document.getElementById("buttons");
 tests.forEach(([name, make]) => {
   const b = document.createElement("button");
@@ -47,7 +61,7 @@ tests.forEach(([name, make]) => {
   b.onclick = async () => {
     const t0 = Date.now();
     try {
-      const c = await navigator.credentials.create(make());
+      const c = await navigator.credentials.create(await make());
       const ext = c.getClientExtensionResults ? c.getClientExtensionResults() : {};
       const tr = c.response.getTransports ? c.response.getTransports() : [];
       log("OK   " + name + " | attachment=" + c.authenticatorAttachment + " transports=" + tr.join(",") + " rk=" + JSON.stringify(ext.credProps || null) + " (" + (Date.now() - t0) + " ms)");
