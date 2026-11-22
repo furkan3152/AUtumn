@@ -45,7 +45,7 @@ const PREVIEW_ADDRESS: Address = "0x7a3f0c1e9b2d4a6f8e5c3b1a0d9e8f7c6b5a4d3e";
 const PREVIEW_GOLD: Address = "0x9e1c0a2b3d4e5f60718293a4b5c6d7e8f9a0b1c2";
 const FEE = 20n * CELO;
 /** Preview figures: 0.0522 USD₮ per CELO and a 0.005 USD₮ relay fee, close to Celo mainnet on 2026-11-21. */
-const PREVIEW_FEES = { usdtPerCelo: 52_214n, relayFeeEstimate: 5_000n };
+const PREVIEW_FEES = { usdtPerCelo: 52_214n, relayFeeEstimate: 19_000n };
 const PREVIEW_KEY = `0x04${"5c".repeat(32)}${"a7".repeat(32)}` as const;
 const PREVIEW_SEND_FEE = 6_000n; // 0.006 USD₮
 /** Made-up passkey facts for the preview's backup code. */

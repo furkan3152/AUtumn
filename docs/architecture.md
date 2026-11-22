@@ -32,16 +32,34 @@ The session key has one USD₮ spend limit per period:
 0.05 USD₮ per purchase (`DEFAULT_FEE_ALLOWANCE_PER_BUY`, `core/src/grant.ts`).
 A 1 USD₮ daily plan therefore has a cap of 1.05 USD₮ per day.
 
-Relay fees are paid in USD₮ from the same cap. Before each purchase the
-runner asks the relay for the fee of the exact calls (`quoteExecute`) and
-skips the purchase, to retry later in the period, when the fee is above the
-allowance (`agent/src/runner.ts`). On mainnet the agent's relay fee was
-0.00974 USD₮ and 0.007549 USD₮ for the two agent purchases so far
+Altana's fee is paid in USD₮ from the same cap. Before each purchase the
+runner asks the relay for the fee of the exact calls and skips the purchase,
+to retry later in the period, when the fee is above the allowance
+(`agent/src/runner.ts`). With `AUTUMN_SUBMITTER=relay` that is the relay's
+quote (`quoteExecute`); with `direct-prepared`, what the live deployment
+runs, it is the `paymentMaxAmount` of the intent the relay prepares, which is
+what the wallet then pays. On mainnet the fee was 0.00974 USD₮ and
+0.007549 USD₮ on the two relay-sent purchases (the relay lowers it when it
+sends) and 0.016328 USD₮ on the first self-submitted one
 ([mainnet-results.md](mainnet-results.md), [usage.md](usage.md)).
 
-The relay fee is part of the signed intent, and the account pays it to
-whoever submits the intent. A leaked session key could therefore send up to
-the cap's remaining room as "fees". The cap is the bound, not the allowlist.
+The fee's maximum is part of the signed intent; its amount and recipient are
+not signed, so whoever submits the intent chooses them, up to that maximum.
+A leaked session key could therefore send up to the cap's remaining room as
+"fees". The cap is the bound, not the allowlist.
+
+## Who signs, who sends, who pays
+
+| Transaction | Signed by | Sent by | Gas paid by | Fee |
+|---|---|---|---|---|
+| Purchase (`direct-prepared`, the live deployment) | the session key, over the intent Altana's relay prepared | Autumn's agent wallet [`0x0b5B…a9Dd`](https://celoscan.io/address/0x0b5B7ec235F2291396c63F4afc96599B4F70a9Dd), with our ERC-8021 tag as the last bytes of the calldata | the agent wallet, in CELO (Autumn sponsors it) | the owner's wallet pays Altana's fee in USD₮, inside the cap, to Altana's fee recipient `0xaF08…C4bC` |
+| Purchase (`relay`, the default in code) | the session key | Altana's relay | Altana's relay | the owner's wallet pays the relay's fee in USD₮, inside the cap |
+| Grant, revoke, identity registration, "Send out" | the owner's passkey | Altana's relay | Altana's relay | the owner's wallet pays the relay's fee, in USD₮ or CELO; the first grant also pays the KeyStore registration in CELO |
+
+The agent wallet is also the address registered with the hackathon entry
+and holds ERC-8004 agent id 10098. Submitting needs no authority over the
+owner's wallet: the Orchestrator accepts a signed intent from any sender
+([direct-submit.md, section 1](direct-submit.md)).
 
 ## Price protection
 
@@ -98,3 +116,8 @@ encryption key can use the session key within its limits (the cap, the
 allowlist and the expiry) until the owner revokes it. Losing the encryption
 key strands every active plan (`web/.env.example`). "Send out" does not
 depend on it: it needs only the passkey, the Altana relay and a Celo RPC.
+
+The agent wallet's private key is a server setting,
+`AUTUMN_DIRECT_SUBMITTER_KEY`. It cannot sign intents; with it, someone can
+spend the agent wallet's own CELO, and send intents the session key has
+already signed.

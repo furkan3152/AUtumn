@@ -1,11 +1,16 @@
 # Mainnet results, 22 Nov 2026
 
-Two runs on Celo mainnet against the live deployment
-(https://autumn-gold.onrender.com, `AUTUMN_EXECUTION=live`, relay
-submission), with GoldBuyer
+Runs on Celo mainnet against the live deployment
+(https://autumn-gold.onrender.com, `AUTUMN_EXECUTION=live`), with GoldBuyer
 [`0xB279c4380557b319C42ef3B023Ac8C8b2d64B6A0`](https://celoscan.io/address/0xB279c4380557b319C42ef3B023Ac8C8b2d64B6A0).
+The first end-to-end run and the passkey wallet's purchase used relay
+submission (`AUTUMN_SUBMITTER=relay`). The second end-to-end run used
+`AUTUMN_SUBMITTER=direct-prepared`, which the live deployment now runs: the
+relay prepares each purchase and Autumn's agent wallet
+[`0x0b5B7ec235F2291396c63F4afc96599B4F70a9Dd`](https://celoscan.io/address/0x0b5B7ec235F2291396c63F4afc96599B4F70a9Dd)
+sends it ([direct-submit.md, section 5](direct-submit.md)).
 
-## End-to-end run with `scripts/e2e-mainnet.mjs`
+## End-to-end run with `scripts/e2e-mainnet.mjs` (relay submission)
 
 Wallet [`0xA177651FC7F9BfF0804ad123c4fdb8aa6625683C`](https://celoscan.io/address/0xA177651FC7F9BfF0804ad123c4fdb8aa6625683C),
 whose admin is a private key (secp256k1), not a passkey; see
@@ -52,6 +57,69 @@ and the second pass ran `probes` and the remaining steps.
 | Relay fee, send-out transfers | 0.004194 USD₮ (XAUt0), 0.003714 USD₮ (CELO), 0.003717 USD₮ (USD₮) |
 
 The identity registration's cost is not in the report.
+
+## Second end-to-end run (`direct-prepared`)
+
+Wallet [`0x88DeB13766F676C70cC27770d1fEd5c3Eb2414db`](https://celoscan.io/address/0x88DeB13766F676C70cC27770d1fEd5c3Eb2414db),
+a new team test wallet whose admin is a private key (secp256k1). Plan: 1 USD₮
+per day, cap 1.05 USD₮ per day. Run between 15:08 and 15:16 UTC in five
+passes, every step passing at its first attempt. The full record is
+[runs/e2e-report-0x88deb13766f676c70cc27770d1fed5c3eb2414db.json](runs/e2e-report-0x88deb13766f676c70cc27770d1fed5c3eb2414db.json).
+
+| Step | Result | Transaction | What was checked |
+|---|---|---|---|
+| `preflight` | passed | none | Server healthy and live; GoldBuyer code present; 30-minute price check available; KeyStore fee 9.2479 CELO per key |
+| `wallet` | passed | none | The relay registered the wallet with its admin key; the EIP-7702 upgrade lands with the grant |
+| `plan` (grant) | passed | [`0x4ad6e1bc…603e`](https://celoscan.io/tx/0x4ad6e1bc7edd078da19bed54d9b315f9e6341165decbc166a7bb0c677af8603e) | The account stores exactly the plan's limits: USD₮ cap 1,050,000 base units per day; allowlist `USD₮.approve`, `GoldBuyer.buy` and the Orchestrator any-function entry; expiry 12 weeks out; not super-admin. KeyStore valid; two `KeyRegistered` events; `sessionLimitsMismatch` none; the server activated the plan. Sent by the relay |
+| `tick` (purchase) | passed | [`0x34972329…53a9`](https://celoscan.io/tx/0x34972329dfa9f0011cacf8e56ace9d7b45de40ffa174f158ccc4f798bd3953a9) | One `Bought` event: 1 USD₮ in, 0.00028 XAUt0 out to the wallet. Outer transaction from the agent wallet `0x0b5B…a9Dd` to the Orchestrator. Altana's fee 0.016328 USD₮ paid to `0xaF08…C4bC` (intent `paymentAmount` 16,328, maximum 16,328); session spend this period 1.016328 of 1.05 USD₮. Our tag at the end of the outer calldata and in 2 of 2 inner calls; `verifyTx` returns `{"codes":["celo_c24c5a65e5a3"]}` |
+| `tick-again` | passed | none | Decision `already_bought`; no new purchase |
+| `probes` | passed | none | Over-cap purchase (2.05 USD₮) and a call outside the allowlist (`USD₮.transfer`) both refused when the relay was asked to prepare them; no transaction, balances unchanged |
+| `identity` | passed | [`0xf1d11270…015a`](https://celoscan.io/tx/0xf1d1127007f054064c1bdf12d218a4ef741eb74eed9fb13ec1bccc907be9015a) | ERC-8004 agent id 10099, owned by the wallet, record name "Autumn"; https://8004scan.io/agents/celo/10099 |
+| `revoke` | passed | [`0x7f30def9…f692`](https://celoscan.io/tx/0x7f30def994b3bdcd789a8768a484d145a30268191362adb0625f41491391f692) | KeyStore `isValidKey` false; `getKey` reverts `KeyDoesNotExist`; `getKeys()` no longer lists the key; the server stopped the plan; a purchase attempted afterwards was refused; the next tick did not act on the plan |
+| `send-out` | passed | XAUt0 [`0x762e5649…eb8e`](https://celoscan.io/tx/0x762e56496c238a2f38a01a16ed47a4db074fe71eee7124df975b4102dabbeb8e), CELO [`0x7c25ca3b…aeb6`](https://celoscan.io/tx/0x7c25ca3b1e9b7252098fc12d82736282ef89759c819984460afffe67a169aeb6), USD₮ [`0x5f9745d8…9a1b`](https://celoscan.io/tx/0x5f9745d82983ef7703c38e2056de3a015df20a96ab593002e19938c6bbc89a1b) | Each transfer's receipt and the destination's balance change: 0.00028 XAUt0, 2.96840826922393049 CELO, 2.363443 USD₮ |
+
+The purchase's receipt, read from forno, also shows `IntentExecuted` for the
+wallet with the nonce on the SDK's `0xa17a…` lane and error 0, 339,272 gas
+used at 202.5 gwei (0.06870258 CELO, paid by the agent wallet), and a USD₮
+`Transfer` of 16,328 from the wallet to `0xaF08…C4bC`. The grant, identity,
+revoke and send-out transactions were sent by the relay; `verifyTx` returns
+null for each of them.
+
+### Refusals
+
+| Attempt | Error | Autumn's classification |
+|---|---|---|
+| Over the cap (2.05 USD₮ on a 1.05 USD₮ cap) | the relay could not prepare it: `ExceededSpendLimit` for USD₮ | `cap_exceeded`, nothing bought, plan keeps running |
+| Outside the allowlist (`USD₮.transfer` to the wallet itself, amount 0) | the relay could not prepare it: `UnauthorizedCall` | `call_not_permitted`, nothing bought |
+| Purchase after the revoke | Autumn's own check before preparing: the key is no longer on the wallet | `session_ended`, nothing bought, plan stopped |
+
+### Fees observed
+
+| What | Paid |
+|---|---|
+| KeyStore registration, first grant (two keys) | 18.52159173077606951 CELO, after the refund |
+| Relay fee, grant | 0.03074 USD₮ (quoted 0.066602) |
+| Altana's fee, purchase | 0.016328 USD₮, the prepared maximum |
+| Gas, purchase (paid by the agent wallet) | 0.06870258 CELO (339,272 gas) |
+| Relay fee, revoke | 0.004852 USD₮ |
+| Relay fee, send-out transfers | 0.004125 USD₮ (XAUt0), 0.003676 USD₮ (CELO), 0.003693 USD₮ (USD₮) |
+
+The identity registration's cost is not in the report.
+
+## Agent wallet
+
+Autumn's agent wallet,
+[`0x0b5B7ec235F2291396c63F4afc96599B4F70a9Dd`](https://celoscan.io/address/0x0b5B7ec235F2291396c63F4afc96599B4F70a9Dd),
+is the address registered with the hackathon entry and the sender of
+purchases under `direct-prepared`. It registered its own ERC-8004 identity,
+agent id 10098, in
+[`0x66a0295d…182b`](https://celoscan.io/tx/0x66a0295db77343c5f0b05f50609f5014df5501802e71640f8230f3d127c2182b)
+(block 83,459,280), https://8004scan.io/agents/celo/10098. The registry
+(`0x8004A169FB4a3325136EB29fA0ceB6D2e539a432`) reports it as the owner of
+10098, and `tokenURI(10098)` holds the record name "Autumn", the description
+"Buys a little Tether Gold (XAUt0) on a schedule for the owners of Altana
+wallets, within the limits each owner wrote onchain." and the service
+`https://autumn-gold.onrender.com` (read 22 Nov 2026).
 
 ## Passkey wallet
 

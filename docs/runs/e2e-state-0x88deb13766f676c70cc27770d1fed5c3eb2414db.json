@@ -1,0 +1,366 @@
+{
+  "version": 1,
+  "wallet": "0x88DeB13766F676C70cC27770d1fEd5c3Eb2414db",
+  "steps": {
+    "preflight": {},
+    "wallet": {
+      "status": "passed",
+      "passedAt": "2026-11-22T15:08:28.184Z"
+    },
+    "plan": {
+      "grantQuote": [
+        {
+          "kind": "account",
+          "fee": "66602",
+          "feeToken": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+          "value": "20373750903853676460"
+        }
+      ],
+      "balancesBeforeGrant": {
+        "usdt": "3450000",
+        "xaut0": "0",
+        "celo": "21500000000000000000",
+        "blockNumber": "83459649"
+      },
+      "grantStatus": "granted",
+      "grantFacts": {
+        "block": "83459658",
+        "keysRegistered": [
+          {
+            "keyId": "0x92cbf0d28e8062623661cea9a0ddfe190256c74b823154629bf527bf1382237b",
+            "isRoot": true
+          },
+          {
+            "keyId": "0x4b9e28fa0290c4af22159c22112f360c82283313e5684d87dc8bced649708478",
+            "isRoot": false
+          }
+        ],
+        "celoSpent": "18521591730776069510",
+        "usdtSpent": "30740"
+      },
+      "status": "passed",
+      "passedAt": "2026-11-22T15:13:52.731Z"
+    },
+    "tick": {
+      "lastReport": {
+        "planId": "b2280e45-4e1a-4050-9014-8cee08c87ed3",
+        "decision": "bought",
+        "slot": "weekly",
+        "txHash": "0x34972329dfa9f0011cacf8e56ace9d7b45de40ffa174f158ccc4f798bd3953a9",
+        "amountIn": "1000000",
+        "out": "280"
+      },
+      "txHash": "0x34972329dfa9f0011cacf8e56ace9d7b45de40ffa174f158ccc4f798bd3953a9",
+      "purchase": {
+        "block": "83459683",
+        "amountIn": "1000000",
+        "out": "280",
+        "fee": "16328",
+        "route": "Altana Orchestrator intent",
+        "verifyTx": {
+          "codes": [
+            "celo_c24c5a65e5a3"
+          ],
+          "schemaId": 0
+        },
+        "innerCallsTagged": 2,
+        "blockTime": 1795360441
+      },
+      "status": "passed",
+      "passedAt": "2026-11-22T15:14:08.236Z"
+    },
+    "tick-again": {
+      "status": "passed",
+      "passedAt": "2026-11-22T15:14:26.488Z"
+    },
+    "probes": {
+      "over-cap": {
+        "status": "passed",
+        "result": {
+          "planId": "b2280e45-4e1a-4050-9014-8cee08c87ed3",
+          "kind": "over-cap",
+          "wallet": "0x88DeB13766F676C70cC27770d1fEd5c3Eb2414db",
+          "planStatus": "active",
+          "sessionBefore": {
+            "status": "active",
+            "onAccount": true,
+            "keyStoreValid": true,
+            "limitsMatchPlan": true,
+            "limitsMismatch": null,
+            "cap": {
+              "period": "day",
+              "limit": "1050000",
+              "spent": "1016328",
+              "remaining": "33672",
+              "resetsAt": 1795392000
+            },
+            "block": "83459705"
+          },
+          "balancesBefore": {
+            "usdt": "2402932",
+            "xaut0": "280",
+            "celo": "2978408269223930490",
+            "block": "83459705"
+          },
+          "attempted": true,
+          "outcome": "refused",
+          "request": {
+            "calls": [
+              {
+                "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+                "selector": "0x095ea7b3"
+              },
+              {
+                "to": "0xB279c4380557b319C42ef3B023Ac8C8b2d64B6A0",
+                "selector": "0xd6febde8"
+              }
+            ],
+            "amountIn": "2050000"
+          },
+          "failure": {
+            "kind": "cap_exceeded",
+            "message": "The Altana relay could not prepare the purchase: RPC Request failed. | ExceededSpendLimit(ExceededSpendLimit { token: 0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e }) | RPC Request failed.",
+            "code": "direct_submit",
+            "bought": "no",
+            "stopsPlan": false
+          },
+          "sdkError": {
+            "name": "DirectSubmitError",
+            "message": "The Altana relay could not prepare the purchase: RPC Request failed. | ExceededSpendLimit(ExceededSpendLimit { token: 0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e }) | RPC Request failed."
+          },
+          "onchain": {
+            "txHash": null,
+            "receipt": null,
+            "purchasesInTx": [],
+            "purchasesDuringProbe": []
+          },
+          "sessionAfter": {
+            "status": "active",
+            "onAccount": true,
+            "keyStoreValid": true,
+            "limitsMatchPlan": true,
+            "limitsMismatch": null,
+            "cap": {
+              "period": "day",
+              "limit": "1050000",
+              "spent": "1016328",
+              "remaining": "33672",
+              "resetsAt": 1795392000
+            },
+            "block": "83459713"
+          },
+          "balancesAfter": {
+            "usdt": "2402932",
+            "xaut0": "280",
+            "celo": "2978408269223930490",
+            "block": "83459713"
+          },
+          "balancesUnchanged": true
+        }
+      },
+      "outside-allowlist": {
+        "status": "passed",
+        "result": {
+          "planId": "b2280e45-4e1a-4050-9014-8cee08c87ed3",
+          "kind": "outside-allowlist",
+          "wallet": "0x88DeB13766F676C70cC27770d1fEd5c3Eb2414db",
+          "planStatus": "active",
+          "sessionBefore": {
+            "status": "active",
+            "onAccount": true,
+            "keyStoreValid": true,
+            "limitsMatchPlan": true,
+            "limitsMismatch": null,
+            "cap": {
+              "period": "day",
+              "limit": "1050000",
+              "spent": "1016328",
+              "remaining": "33672",
+              "resetsAt": 1795392000
+            },
+            "block": "83459720"
+          },
+          "balancesBefore": {
+            "usdt": "2402932",
+            "xaut0": "280",
+            "celo": "2978408269223930490",
+            "block": "83459720"
+          },
+          "attempted": true,
+          "outcome": "refused",
+          "request": {
+            "calls": [
+              {
+                "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+                "selector": "0xa9059cbb"
+              }
+            ],
+            "amountIn": null
+          },
+          "failure": {
+            "kind": "call_not_permitted",
+            "message": "The Altana relay could not prepare the purchase: RPC Request failed. | UnauthorizedCall(UnauthorizedCall { keyHash: 0x78243f65d243abe6ead6b15e671785c9748475dcdff0e703fa40c5e2dc661a88, target: 0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e, data: 0xa9059cbb00000000000000000000000088deb13766f676c70cc27770d1fed5c3eb2414db000000000000000000000000000000000000000000000000000000000000000063656c6f5f633234633561363565356133110080218021802180218021802180218021 }) | RPC Request failed.",
+            "code": "direct_submit",
+            "bought": "no",
+            "stopsPlan": false
+          },
+          "sdkError": {
+            "name": "DirectSubmitError",
+            "message": "The Altana relay could not prepare the purchase: RPC Request failed. | UnauthorizedCall(UnauthorizedCall { keyHash: 0x78243f65d243abe6ead6b15e671785c9748475dcdff0e703fa40c5e2dc661a88, target: 0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e, data: 0xa9059cbb00000000000000000000000088deb13766f676c70cc27770d1fed5c3eb2414db000000000000000000000000000000000000000000000000000000000000000063656c6f5f633234633561363565356133110080218021802180218021802180218021 }) | RPC Request failed."
+          },
+          "onchain": {
+            "txHash": null,
+            "receipt": null,
+            "purchasesInTx": [],
+            "purchasesDuringProbe": []
+          },
+          "sessionAfter": {
+            "status": "active",
+            "onAccount": true,
+            "keyStoreValid": true,
+            "limitsMatchPlan": true,
+            "limitsMismatch": null,
+            "cap": {
+              "period": "day",
+              "limit": "1050000",
+              "spent": "1016328",
+              "remaining": "33672",
+              "resetsAt": 1795392000
+            },
+            "block": "83459727"
+          },
+          "balancesAfter": {
+            "usdt": "2402932",
+            "xaut0": "280",
+            "celo": "2978408269223930490",
+            "block": "83459727"
+          },
+          "balancesUnchanged": true
+        }
+      },
+      "status": "passed",
+      "passedAt": "2026-11-22T15:14:56.653Z"
+    },
+    "identity": {
+      "outcome": {
+        "status": "registered",
+        "chainId": 42220,
+        "registry": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+        "agentId": "10099",
+        "callsId": "0x3178e5fae085f6a8e451a19e35b63ba861544b271afd7d0cb475d8e5d5e15884",
+        "transactionHash": "0xf1d1127007f054064c1bdf12d218a4ef741eb74eed9fb13ec1bccc907be9015a"
+      },
+      "agentId": "10099",
+      "status": "passed",
+      "passedAt": "2026-11-22T15:15:05.071Z"
+    },
+    "revoke": {
+      "txHash": "0x7f30def994b3bdcd789a8768a484d145a30268191362adb0625f41491391f692",
+      "fee": {
+        "usdt": "4852",
+        "celo": "0"
+      },
+      "serverStopped": true,
+      "probe": {
+        "planId": "b2280e45-4e1a-4050-9014-8cee08c87ed3",
+        "kind": "after-revoke",
+        "wallet": "0x88DeB13766F676C70cC27770d1fEd5c3Eb2414db",
+        "planStatus": "stopped",
+        "sessionBefore": {
+          "status": "revoked",
+          "onAccount": false,
+          "keyStoreValid": false,
+          "limitsMatchPlan": false,
+          "limitsMismatch": null,
+          "cap": null,
+          "block": "83459756"
+        },
+        "balancesBefore": {
+          "usdt": "2379569",
+          "xaut0": "280",
+          "celo": "2978408269223930490",
+          "block": "83459756"
+        },
+        "attempted": true,
+        "outcome": "refused",
+        "request": {
+          "calls": [
+            {
+              "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+              "selector": "0x095ea7b3"
+            },
+            {
+              "to": "0xB279c4380557b319C42ef3B023Ac8C8b2d64B6A0",
+              "selector": "0xd6febde8"
+            }
+          ],
+          "amountIn": "2050000"
+        },
+        "failure": {
+          "kind": "session_ended",
+          "message": "The agent's key is no longer on the wallet (revoked or expired).",
+          "code": "direct_submit",
+          "bought": "no",
+          "stopsPlan": true
+        },
+        "sdkError": {
+          "name": "DirectSubmitError",
+          "message": "The agent's key is no longer on the wallet (revoked or expired)."
+        },
+        "onchain": {
+          "txHash": null,
+          "receipt": null,
+          "purchasesInTx": [],
+          "purchasesDuringProbe": []
+        },
+        "sessionAfter": {
+          "status": "revoked",
+          "onAccount": false,
+          "keyStoreValid": false,
+          "limitsMatchPlan": false,
+          "limitsMismatch": null,
+          "cap": null,
+          "block": "83459762"
+        },
+        "balancesAfter": {
+          "usdt": "2379569",
+          "xaut0": "280",
+          "celo": "2978408269223930490",
+          "block": "83459762"
+        },
+        "balancesUnchanged": true
+      },
+      "status": "passed",
+      "passedAt": "2026-11-22T15:15:38.159Z"
+    },
+    "send-out": {
+      "XAUT0": {
+        "txHash": "0x762e56496c238a2f38a01a16ed47a4db074fe71eee7124df975b4102dabbeb8e",
+        "amount": "280",
+        "status": "passed"
+      },
+      "CELO": {
+        "txHash": "0x7c25ca3b1e9b7252098fc12d82736282ef89759c819984460afffe67a169aeb6",
+        "amount": "2968408269223930490",
+        "status": "passed"
+      },
+      "USDT": {
+        "txHash": "0x5f9745d82983ef7703c38e2056de3a015df20a96ab593002e19938c6bbc89a1b",
+        "amount": "2363443",
+        "status": "passed"
+      },
+      "status": "passed",
+      "passedAt": "2026-11-22T15:16:03.300Z"
+    }
+  },
+  "plan": {
+    "planId": "b2280e45-4e1a-4050-9014-8cee08c87ed3",
+    "sessionPublicKey": "0x0419dcf4c468aabd71421120e8dbf04c2a1816eb36e67e824afc6cdff10a55704bd83b52bf393768ca6d3689db49b75c2bd572e0ee884d6a2ac3ff231bb55e0df0",
+    "amountPerBuy": "1000000",
+    "period": "day",
+    "expiresAt": 1802618004,
+    "createdAt": 1795360404,
+    "grantTxHash": "0x4ad6e1bc7edd078da19bed54d9b315f9e6341165decbc166a7bb0c677af8603e",
+    "createdBlock": "83459647"
+  }
+}

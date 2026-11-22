@@ -28,36 +28,47 @@ Wallets track. Live app: https://autumn-gold.onrender.com
 
    A second passkey prompt registers the agent's ERC-8004 identity.
 3. The agent buys on schedule through `GoldBuyer`, a 73-line contract with no
-   owner that swaps USD₮ for XAUt0 and sends the gold to the caller. It
-   refuses a purchase when the relay's fee is above the allowance.
+   owner that swaps USD₮ for XAUt0 and sends the gold to the caller. For
+   each purchase Altana's relay prepares and prices the intent, the session
+   key signs it, and Autumn's agent wallet
+   [`0x0b5B…a9Dd`](https://celoscan.io/address/0x0b5B7ec235F2291396c63F4afc96599B4F70a9Dd)
+   sends it to Altana's Orchestrator with our ERC-8021 tag as the last bytes
+   of the calldata. Your wallet pays Altana's fee in USD₮, inside the cap;
+   the agent wallet pays the gas in CELO, so Autumn sponsors that gas. The
+   agent refuses a purchase when Altana's fee is above the allowance.
 4. You can stop the agent at any time with one revoke transaction, approved
    with your passkey.
 5. "Send out" moves USD₮, XAUt0 or CELO to any Celo address, with your
    passkey, whether the agent runs or not.
 
-The schedule rules, the fee allowance, how the server checks what the wallet
-granted, and how it holds the session key are in
+Grants, revokes, identity registration and "Send out" are signed with your
+passkey and sent by Altana's relay. The schedule rules, the fee allowance,
+who signs, sends and pays for what, how the server checks what the wallet
+granted, and how it holds the keys are in
 [docs/architecture.md](docs/architecture.md).
 
 ## Hackathon track requirements
 
-All transactions below are on Celo mainnet, from the end-to-end run of
-22 Nov 2026 ([docs/mainnet-results.md](docs/mainnet-results.md)).
+All transactions below are on Celo mainnet, from the runs of 22 Nov 2026
+([docs/mainnet-results.md](docs/mainnet-results.md)).
 
 | Requirement | Evidence |
 |---|---|
+| Agent wallet and its ERC-8004 identity | Agent wallet [`0x0b5B…a9Dd`](https://celoscan.io/address/0x0b5B7ec235F2291396c63F4afc96599B4F70a9Dd), the address registered with the hackathon entry and the sender of every purchase since the live deployment switched to `direct-prepared`. Agent id 10098, registered from that wallet in [`0x66a0…182b`](https://celoscan.io/tx/0x66a0295db77343c5f0b05f50609f5014df5501802e71640f8230f3d127c2182b), https://8004scan.io/agents/celo/10098 |
+| Agent purchase credited to our tag | [`0x3497…53a9`](https://celoscan.io/tx/0x34972329dfa9f0011cacf8e56ace9d7b45de40ffa174f158ccc4f798bd3953a9), sent by the agent wallet for wallet [`0x88De…14db`](https://celoscan.io/address/0x88DeB13766F676C70cC27770d1fEd5c3Eb2414db) (grant [`0x4ad6…603e`](https://celoscan.io/tx/0x4ad6e1bc7edd078da19bed54d9b315f9e6341165decbc166a7bb0c677af8603e), cap 1.05 USD₮ per day): 1 USD₮ in, 0.00028 XAUt0 out, Altana's fee 0.016328 USD₮ paid to its recipient, tag at the end of the outer calldata; `verifyTx` returns `celo_c24c5a65e5a3`. Over-cap and outside-allowlist attempts were refused by the relay when asked to prepare them (`ExceededSpendLimit`, `UnauthorizedCall`); nothing was sent. Revoke [`0x7f30…f692`](https://celoscan.io/tx/0x7f30def994b3bdcd789a8768a484d145a30268191362adb0625f41491391f692), after which a purchase was refused |
 | Altana wallet on Celo mainnet | Wallet [`0xA177…683C`](https://celoscan.io/address/0xA177651FC7F9BfF0804ad123c4fdb8aa6625683C), upgraded to the Altana account by the grant [`0xfef8…263b`](https://celoscan.io/tx/0xfef8bc0df856fdecdd66788c48a3c702fb6957bfd601060a8fc30f717beb263b). A wallet whose only admin key is a passkey, [`0x1585…5429`](https://celoscan.io/address/0x15855ae2E04Fd00eFA45cB70D2C29E5777925429), granted a session key with its passkey ([`0xd1f9…be75`](https://celoscan.io/tx/0xd1f9795a68fc683499615b3afa1099b1ebecc7aaf95bf0a04a101a9e3d0bbe75)), had the agent buy ([`0x21cc…32ca`](https://celoscan.io/tx/0x21ccf27b7a1a644415ef8f3b8c42348254ea61e73a4867a1a2cca368269e32ca)) and revoked the key ([`0x67fc…1dce`](https://celoscan.io/tx/0x67fc22a957a6cc97ae27d57752c233124f7bc36c3770e91a0eed7b81c11b1dce)) |
 | Session key with spend cap, allowlist and expiry | Grant [`0xfef8…263b`](https://celoscan.io/tx/0xfef8bc0df856fdecdd66788c48a3c702fb6957bfd601060a8fc30f717beb263b): cap 1.05 USD₮ per day, allowlist `approve`, `buy` and the Orchestrator entry, expiry 12 weeks. Agent purchase [`0xe6f4…c785`](https://celoscan.io/tx/0xe6f4f902d68a8897be76c11eae1a96e483e749624ff3f103b749399fd75cc785). An over-cap purchase was refused (`spend_limit_exceeded`) and a call outside the allowlist was refused (`call_not_permitted`); neither sent a transaction |
 | Revoke stops the agent | Revoke [`0xd447…72f5`](https://celoscan.io/tx/0xd447908bd5e96c246ec46435c462a5f41309794588c15ecc5a6f841629f672f5); the key is gone from the account and the KeyStore, the server stopped the plan, and a purchase attempted afterwards was refused |
-| ERC-8004 agent identity | Agent id 10096, [`0xe99e…e2e9`](https://celoscan.io/tx/0xe99e01a60e12f3f18e7d9b1601d7eac618f163b2195fea6ce7478a9866dae2e9), https://8004scan.io/agents/celo/10096. The passkey wallet registered agent id 10097, [`0x446c…aabe`](https://celoscan.io/tx/0x446c0bd4f4bb5cb2ee5b50141e3a1a2a1864b4d55fd70bff736f865c0d15aabe), https://8004scan.io/agents/celo/10097 |
+| ERC-8004 identity per wallet | Agent id 10096, [`0xe99e…e2e9`](https://celoscan.io/tx/0xe99e01a60e12f3f18e7d9b1601d7eac618f163b2195fea6ce7478a9866dae2e9), https://8004scan.io/agents/celo/10096. The passkey wallet registered agent id 10097, [`0x446c…aabe`](https://celoscan.io/tx/0x446c0bd4f4bb5cb2ee5b50141e3a1a2a1864b4d55fd70bff736f865c0d15aabe), https://8004scan.io/agents/celo/10097. The second end-to-end wallet registered agent id 10099, [`0xf1d1…015a`](https://celoscan.io/tx/0xf1d1127007f054064c1bdf12d218a4ef741eb74eed9fb13ec1bccc907be9015a) |
 
 ## Onchain usage
 
 Every purchase through GoldBuyer is a public `Bought` event.
 [docs/usage.md](docs/usage.md) lists them all with totals, generated from
-Celo mainnet; regenerate it with `node scripts/proof.mjs`. Purchases by the
-team's own wallets are flagged and not counted as users; at the last read
-there were no independent buyers.
+Celo mainnet; regenerate it with `node scripts/proof.mjs`. It shows who sent
+each purchase and whether `verifyTx` credits it. Purchases by the team's own
+wallets are flagged and not counted as users, and the agent wallet is a
+sender, not a buyer. At the last read there were no independent buyers.
 
 ## Deployed on Celo mainnet
 
@@ -75,23 +86,32 @@ capacity to 1,800 observations
 
 - **GoldBuyer is unaudited.** It has no owner and is fork-tested against
   Celo mainnet (`contracts/`).
-- **Relay dependency.** Purchases, revokes and "Send out" go through Altana's
-  relay. If it is down, the agent cannot buy (it retries) and the app cannot
-  send; funds stay in the wallet.
-- **Attribution.** Our tag `celo_c24c5a65e5a3` is attached to every agent
-  call, but Celo's `verifyTx` returns null for relayed transactions, because
-  it reads the tag only at the end of the outer calldata. Reported as
-  https://github.com/celo-org/attribution-tags/issues/30. Two submitters
-  that put the tag at the end exist
-  ([docs/direct-submit.md](docs/direct-submit.md)). `direct` builds a
-  fee-free intent itself. `direct-prepared` lets the relay prepare and price
-  the intent as today, so Altana is still paid, and sends it from the agent's
-  own address. Both are off by default, proven only on a local fork, and not
-  used by the live deployment.
-- **Fees relative to small buys.** Each buy pays the pool's 0.3% and a relay
-  fee (0.0097 USD₮ and 0.0075 USD₮ on the two agent purchases so far), so
-  about 1.0 to 1.3% on a 1 USD₮ buy. The first plan's KeyStore registration cost
-  18.49 CELO (about 1 USD₮ at the time).
+- **Relay dependency.** Altana's relay prepares every purchase and sends
+  grants, revokes and "Send out". If it is down, the agent cannot buy (it
+  retries) and the app cannot send; funds stay in the wallet.
+- **Attribution.** Celo's `verifyTx` reads the tag only at the end of the
+  outer calldata, and the hackathon counts a transaction only when it is
+  also sent from the registered agent wallet. The live deployment therefore
+  runs `AUTUMN_SUBMITTER=direct-prepared`
+  ([docs/direct-submit.md, section 5](docs/direct-submit.md)), and
+  `verifyTx` credits purchase `0x3497…53a9`. The first two agent purchases,
+  `0x21cc…32ca` and `0xe6f4…c785`, were sent by the relay with the tag only
+  in the inner calls; `verifyTx` returns null for them. Background:
+  https://github.com/celo-org/attribution-tags/issues/30.
+- **Purchase gas.** The agent wallet pays it in CELO: 339,272 gas, 0.0687 CELO
+  (about 0.0037 USD₮) for `0x3497…53a9`. If it runs out of CELO, the agent
+  cannot buy.
+- **Fees relative to small buys.** Each buy pays the pool's 0.3% and Altana's
+  fee. When the relay sends, it lowers the fee at sending time (0.0097 and
+  0.0075 USD₮ on the two relay-sent purchases). A self-submitted intent pays
+  the amount the relay prepared, which is the signed maximum: 0.016328 USD₮
+  on `0x3497…53a9`, so about 1.9% on a 1 USD₮ buy. The first plan's KeyStore
+  registration cost 18.49 CELO (about 1 USD₮ at the time).
+- **Copied intents.** Anyone may submit a signed intent. Someone who copies
+  ours from the mempool could send it first: the purchase still happens once,
+  but without our tag, and they could redirect the unsigned fee, up to the
+  signed maximum, to themselves. The wallet pays the same. Whether Celo's
+  mempool is public was not checked.
 - **Price check.** If the pool's oldest stored observation is younger than
   30 minutes, GoldBuyer reverts; the agent skips and retries later in the
   period.
@@ -132,8 +152,11 @@ Put the GoldBuyer address and block from
 and `NEXT_PUBLIC_AUTUMN_…` lines, and use `NEXT_PUBLIC_AUTUMN_RP_ID=localhost`
 locally. Leave
 `AUTUMN_EXECUTION=dry-run` to see decisions without spending; `live` sends
-purchases. `NEXT_PUBLIC_AUTUMN_PREVIEW=1` shows the screens with no wallet or
-chain. Run the agent once (what the scheduler does every hour):
+purchases. `AUTUMN_SUBMITTER` chooses who sends them: `relay` (the default)
+or `direct-prepared` (the live deployment), which needs
+`AUTUMN_DIRECT_SUBMITTER_KEY` for an agent wallet that holds CELO for gas
+([docs/deploy.md](docs/deploy.md)). `NEXT_PUBLIC_AUTUMN_PREVIEW=1` shows the
+screens with no wallet or chain. Run the agent once (what the scheduler does every hour):
 
 ```bash
 curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/tick
@@ -153,10 +176,10 @@ cd ../web && npm test && npm run typecheck
 - [docs/architecture.md](docs/architecture.md): schedule, fee allowance, the Orchestrator entry, server trust model, key custody
 - [docs/passkeys.md](docs/passkeys.md): device-bound passkeys, the backup code, recovery without our deployment
 - [docs/deploy.md](docs/deploy.md): deploying on a Node host, and the Cloudflare Workers alternative
-- [docs/mainnet-results.md](docs/mainnet-results.md): the 22 Nov 2026 mainnet runs
+- [docs/mainnet-results.md](docs/mainnet-results.md): the 22 Nov 2026 mainnet runs, relay-sent and self-submitted
 - [docs/mainnet-run.md](docs/mainnet-run.md): runbook for the funded end-to-end run and the manual passkey checklist
 - [docs/usage.md](docs/usage.md): every purchase through GoldBuyer (generated)
-- [docs/direct-submit.md](docs/direct-submit.md): submitting the Altana intent directly, and the Orchestrator entry
+- [docs/direct-submit.md](docs/direct-submit.md): submitting the Altana intent from the agent wallet, and the Orchestrator entry
 - [docs/altana-spike/RESULTS.md](docs/altana-spike/RESULTS.md): research before the build
 
 ## Licence

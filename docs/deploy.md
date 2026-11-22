@@ -33,6 +33,8 @@ Environment variables (names as in `web/.env.example`, which explains each):
 | `AUTUMN_GOLD_BUYER_ADDRESS`, `AUTUMN_GOLD_BUYER_DEPLOY_BLOCK` | Same values as the public ones |
 | `AUTUMN_CELO_RPC_URL`, `AUTUMN_LOGS_BLOCK_RANGE` | Optional server RPC and block limit |
 | `AUTUMN_EXECUTION` | `live` sends purchases; anything else is a dry run |
+| `AUTUMN_SUBMITTER` | Who sends purchases: `relay` (the default) hands the signed intent to Altana's relay; `direct-prepared` lets the relay prepare and price it, then sends it from the agent wallet with the attribution tag last; `direct` builds a fee-free intent itself ([direct-submit.md](direct-submit.md)). The live deployment runs `direct-prepared` |
+| `AUTUMN_DIRECT_SUBMITTER_KEY` | With `direct-prepared` or `direct`: the agent wallet's private key (0x + 64 hex). That wallet pays every purchase's gas in CELO (339,272 gas, 0.0687 CELO on mainnet purchase `0x3497…53a9`), so keep it funded; with too little CELO the agent does not send. The live deployment's agent wallet is [`0x0b5B…a9Dd`](https://celoscan.io/address/0x0b5B7ec235F2291396c63F4afc96599B4F70a9Dd), the address registered with the hackathon entry |
 | `CRON_SECRET` | At least 16 characters; protects `/api/cron/tick` and `/api/admin/probe` |
 | `AUTUMN_SCHEDULER=internal` | Runs the purchase tick in-process once per UTC hour (from minute 5) |
 | `AUTUMN_KEEP_AWAKE_URL` | Optional, with the line above: a URL requested every ten minutes, so a host that suspends idle services keeps this one running (for example the app's own `/api/health`) |

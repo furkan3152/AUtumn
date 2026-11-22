@@ -24,9 +24,9 @@ describe("CELO price and cost estimates", () => {
   });
 
   it("estimates the relay fee from gas price, and the all-in cost of a buy", () => {
-    const relay = estimateRelayFeeUsdt(202_500_000_000n, RATE); // 202.5 gwei × 500k gas
-    expect(relay).toBe(5_286n);
-    expect(estimateBuyCost(5_000_000n, relay)).toEqual({ poolFee: 15_000n, relayFee: 5_286n, total: 20_286n, totalBps: 40 });
-    expect(estimateBuyCost(1_000_000n, relay).totalBps).toBe(82);
+    const relay = estimateRelayFeeUsdt(202_500_000_000n, RATE); // 202.5 gwei × 1.8M gas
+    expect(relay).toBe(19_032n);
+    expect(estimateBuyCost(5_000_000n, relay)).toEqual({ poolFee: 15_000n, relayFee: 19_032n, total: 34_032n, totalBps: 68 });
+    expect(estimateBuyCost(1_000_000n, relay).totalBps).toBe(220);
   });
 });

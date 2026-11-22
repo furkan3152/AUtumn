@@ -7,27 +7,31 @@ or a database URL into it.
 
 ## Status after the runs of 22 Nov 2026
 
-The automated run passed every step on Celo mainnet
-([mainnet-results.md](mainnet-results.md), full record in
-[runs/e2e-report-0xa177651fc7f9bff0804ad123c4fdb8aa6625683c.json](runs/e2e-report-0xa177651fc7f9bff0804ad123c4fdb8aa6625683c.json)).
-Its wallet's admin is a private key, so it does not cover the passkey. Item
+Two automated runs passed every step on Celo mainnet
+([mainnet-results.md](mainnet-results.md)): the first with relay submission
+([runs/e2e-report-0xa177651fc7f9bff0804ad123c4fdb8aa6625683c.json](runs/e2e-report-0xa177651fc7f9bff0804ad123c4fdb8aa6625683c.json)),
+the second with `AUTUMN_SUBMITTER=direct-prepared`, which the live
+deployment now runs
+([runs/e2e-report-0x88deb13766f676c70cc27770d1fed5c3eb2414db.json](runs/e2e-report-0x88deb13766f676c70cc27770d1fed5c3eb2414db.json)).
+Both wallets' admin is a private key, so neither covers the passkey. Item
 by item:
 
 | # | Item | Status |
 |---|---|---|
 | 1 | Creating a passkey wallet in a browser on our domain, and restoring it | **Not proven.** A wallet whose only admin key is a WebAuthn passkey made an agent purchase ([mainnet-results.md, "Passkey wallet"](mainnet-results.md#passkey-wallet)), granted and revoked with it, but the browser ceremony itself is not recorded, and restore (section 9) was not run |
-| 2 | `grantSession` with a session key known only by its public key (`sessionSignerFromPublicKey`) | **Proven with a private-key admin** (grant `0xfef8bc0d…263b`). From a passkey: grant `0xd1f9795a…be75` and revoke `0x67fc22a9…1dce` of the passkey wallet ([mainnet-results.md, "Passkey wallet"](mainnet-results.md#passkey-wallet)) |
-| 3 | The KeyStore fee charged in CELO, and the relay's quote against 2 × fee × 1.1 | **Proven.** The quote's value, 20.3387 CELO, equals 2 × 9.2449 × 1.1; 18.4898 CELO was kept after the refund |
+| 2 | `grantSession` with a session key known only by its public key (`sessionSignerFromPublicKey`) | **Proven with a private-key admin** (grants `0xfef8bc0d…263b` and `0x4ad6e1bc…603e`). From a passkey: grant `0xd1f9795a…be75` and revoke `0x67fc22a9…1dce` of the passkey wallet ([mainnet-results.md, "Passkey wallet"](mainnet-results.md#passkey-wallet)) |
+| 3 | The KeyStore fee charged in CELO, and the relay's quote against 2 × fee × 1.1 | **Proven.** The quote's value, 20.3387 CELO, equals 2 × 9.2449 × 1.1; 18.4898 CELO was kept after the refund. Second run: the quote's value, 20.3738 CELO, equals 2 × 9.2608 × 1.1 (the fee per key at the grant; the preflight five minutes earlier read 9.2479); 18.5216 CELO kept |
 | 4 | The account storing exactly our cap, period, allowlist (with the Orchestrator entry) and expiry | **Proven.** `sessionLimitsMismatch` none |
-| 5 | `registerAgentIdentity` (ERC-8004) | **Proven** for the private-key wallet (agent id 10096) and for the passkey wallet (agent id 10097, `0x446c0bd4…aabe`) |
-| 6 | A purchase through `GoldBuyer.buy` sent by the relay with our session key | **Proven** (`0xe6f4f902…c785`) |
-| 7 | The relay fee drawn from the session's USD₮ cap, and its size | **Proven.** 0.00974 USD₮; session spend 1.00974 of 1.05 USD₮ |
-| 8 | The relay's refusal over the cap and after a revoke, and the SDK codes | **Proven.** `spend_limit_exceeded`; after the revoke `unknown` ("key hash … is unknown"), which Autumn classifies as `session_ended`. A call outside the allowlist gave `call_not_permitted` |
-| 9 | `revokeSession` with a bare public key, and `isValidKey` turning false | **Proven** with a private-key admin (`0xd447908b…72f5`) |
+| 5 | `registerAgentIdentity` (ERC-8004) | **Proven** for the private-key wallets (agent ids 10096 and 10099) and for the passkey wallet (agent id 10097, `0x446c0bd4…aabe`). The agent wallet registered agent id 10098 itself ([mainnet-results.md, "Agent wallet"](mainnet-results.md#agent-wallet)) |
+| 6 | A purchase through `GoldBuyer.buy` with our session key | **Proven** sent by the relay (`0xe6f4f902…c785`), and with `direct-prepared` sent by the agent wallet `0x0b5B…a9Dd` (`0x34972329…53a9`) |
+| 7 | The fee drawn from the session's USD₮ cap, and its size | **Proven.** Relay-sent: 0.00974 USD₮, session spend 1.00974 of 1.05 USD₮. `direct-prepared`: 0.016328 USD₮ (the prepared maximum), session spend 1.016328 of 1.05 USD₮ |
+| 8 | The refusal over the cap and after a revoke, and the codes | **Proven.** Relay submission: `spend_limit_exceeded`; after the revoke `unknown` ("key hash … is unknown"), which Autumn classifies as `session_ended`; a call outside the allowlist gave `call_not_permitted`. `direct-prepared`: the relay refused to prepare (`ExceededSpendLimit`, `UnauthorizedCall`), classified `cap_exceeded` and `call_not_permitted`; after the revoke Autumn's own key check refused (`session_ended`) |
+| 9 | `revokeSession` with a bare public key, and `isValidKey` turning false | **Proven** with a private-key admin (`0xd447908b…72f5`, `0x7f30def9…f692`) |
 | 10 | The "OLD" price-check refusal as the relay reports it | **Not proven.** The price check was available throughout; the real error text is still unknown |
 | 11 | A deployment's scheduler, database and route handlers | **Partly proven.** The Cloudflare Cron Trigger is not in use. The live Render deployment's route handlers (`/api/health`, plans, `/api/cron/tick`, `/api/admin/probe`) and its database worked in the run. Its in-process hourly scheduler (`AUTUMN_SCHEDULER=internal`) was not part of the run: the harness called the tick itself |
-| 12 | The relay's fee quote (`quoteExecute`) before a session purchase | **Proven indirectly.** The runner sends only after the quote is within the 0.05 USD₮ allowance, and it sent; the quoted value is not in the report |
-| 13 | "Send out" of USD₮, XAUt0 and CELO, and the KeyStore registration on a wallet's first passkey transaction | **Proven with a private-key admin** (three transfers). With a passkey, and the first-transaction registration, not proven |
+| 12 | The relay's fee quote before a session purchase | **Proven.** Relay submission (`quoteExecute`): indirectly; the runner sends only after the quote is within the 0.05 USD₮ allowance, and it sent; the quoted value is not in the report. `direct-prepared`: the prepared intent's fee, 16,328 of a 16,328 maximum, is in the report |
+| 13 | "Send out" of USD₮, XAUt0 and CELO, and the KeyStore registration on a wallet's first passkey transaction | **Proven with a private-key admin** (three transfers in each run). With a passkey, and the first-transaction registration, not proven |
+| 14 | `verifyTx` crediting a purchase to our tag | **Proven with `direct-prepared`** (`0x34972329…53a9` returns `celo_c24c5a65e5a3`). Relay-sent purchases return null |
 
 The app's own screens (what sections 1 to 9 below ask you to record in the
 app) were not part of the automated run.
@@ -132,8 +136,9 @@ and now also refuses an amount that is not above the whole period cap.
 Read-only. `node scripts/proof.mjs` lists every `Bought` event since the
 deploy block (5,000-block windows, retried on forno's "block is out of
 range"), the route (direct call or Orchestrator intent), whether the signing
-key had Autumn's allowlist and is active or revoked now, our tag in the
-inner calls and `verifyTx`'s answer, flags team wallets, and writes
+key had Autumn's allowlist and is active or revoked now, who sent the
+outer transaction (the agent wallet, Altana's relay or another address), our
+tag in the inner calls and `verifyTx`'s answer, flags team wallets, and writes
 `docs/proof/purchases.json` and `purchases.csv`.
 
 ## Before you start
@@ -146,6 +151,9 @@ inner calls and `verifyTx`'s answer, flags team wallets, and writes
       check not available right now, the agent will retry".
 - [ ] The app is deployed (or running locally) with the settings from
       `web/.env.example`, `AUTUMN_EXECUTION=live`, and the migration applied.
+- [ ] With `AUTUMN_SUBMITTER=direct-prepared` (the live deployment), the
+      agent wallet of `AUTUMN_DIRECT_SUBMITTER_KEY` holds CELO for gas
+      (about 340k gas per purchase).
 - [ ] `NEXT_PUBLIC_AUTUMN_RP_ID` is the domain you open the app on.
 - [ ] `curl https://<app>/api/health` answers `{"configured":true,"live":true}`.
 
@@ -208,8 +216,11 @@ UTC day.
   - the session's `spent` for the day from `spendInfos` (amount + relay fee);
   - the relay fee in USD₮;
   - whether our attribution tag `celo_c24c5a65e5a3` appears in the calldata,
-    and what `verifyTx` from `@celo/attribution-tags` returns (expected: null,
-    see docs/altana-spike/RESULTS.md section 7).
+    who sent the transaction, and what `verifyTx` from
+    `@celo/attribution-tags` returns (expected with
+    `AUTUMN_SUBMITTER=direct-prepared`: sent by the agent wallet, and
+    `celo_c24c5a65e5a3`; with `relay`: sent by the relay, and null, see
+    docs/altana-spike/RESULTS.md section 7).
 - [ ] Run the tick again. It must answer `already_bought` and send nothing.
 - [ ] The app shows the purchase, the gold balance and the day's limit used.
 

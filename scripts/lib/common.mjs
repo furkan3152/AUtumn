@@ -41,6 +41,13 @@ export const deps = await load();
 export const GOLD_BUYER = "0xB279c4380557b319C42ef3B023Ac8C8b2d64B6A0";
 export const GOLD_BUYER_DEPLOY_BLOCK = 83395551n;
 export const DEFAULT_BASE_URL = "https://autumn-gold.onrender.com";
+/**
+ * Autumn's agent wallet: the address registered with the hackathon entry
+ * (ERC-8004 agent id 10098). With `AUTUMN_SUBMITTER=direct-prepared`, which the
+ * live deployment runs, it sends every purchase and pays its gas in CELO. It
+ * is a sender, never a buyer.
+ */
+export const AGENT_WALLET = "0x0b5B7ec235F2291396c63F4afc96599B4F70a9Dd";
 
 export const celoscanTx = (h) => `https://celoscan.io/tx/${h}`;
 export const celoscanAddress = (a) => `https://celoscan.io/address/${a}`;

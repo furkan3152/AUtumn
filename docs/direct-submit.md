@@ -1,14 +1,16 @@
 # Direct submission of the Altana intent
 
-Status: implemented and proven on a local fork of Celo mainnet; off by
-default (`AUTUMN_SUBMITTER=relay`); not used by the live deployment. Two
+Status: implemented; off by default in code (`AUTUMN_SUBMITTER=relay`). Two
 variants: `direct` builds the intent locally with no fee (sections 1–4);
 `direct-prepared` lets Altana's relay prepare and price the intent as today
-and only submits it from our EOA (section 5).
+and only submits it from our EOA (section 5). The live deployment runs
+`direct-prepared`, proven on Celo mainnet on 22 Nov 2026 (section 5,
+purchase `0x3497…53a9`). `direct` is proven only on a local fork.
 
-Date: 2026-11-21. Status: **works on a local fork of Celo mainnet.** The direct
-submitter has sent no mainnet transaction and used no real funds. Every
-transaction hash below exists only on a local anvil fork.
+Date: 2026-11-21. Status of `direct`: **works on a local fork of Celo
+mainnet.** The `direct` variant has sent no mainnet transaction and used no
+real funds. Every transaction it sent in section 3 exists only on a
+local anvil fork.
 
 ## Why
 
@@ -300,7 +302,8 @@ every value above.
      sender is the project's registered agent wallet. Other teams are
      credited for exactly this shape with a sender other than the intent's
      wallet (section 5, `0xaaab…9bfc`, `0x6272…30c5`). The agent EOA must
-     therefore be the address registered with Celo.
+     therefore be the address registered with Celo. Ours is
+     `0x0b5B7ec235F2291396c63F4afc96599B4F70a9Dd` (ERC-8004 agent id 10098).
 3. **Someone else can submit our signed intent without the tag.** The intent
    is permissionless: anyone who sees it (in the mempool, or from an RPC
    provider) can submit it first. The purchase still happens exactly once,
@@ -327,9 +330,13 @@ every value above.
 
 ## 5. Relay-prepared, self-submitted (`direct-prepared`)
 
-Date: 2026-11-22. Status: **implemented, unit-tested, and proven on a local
-fork with only the relay faked.** No mainnet transaction has been sent with
-it. Off by default; opt in with `AUTUMN_SUBMITTER=direct-prepared`.
+Date: 2026-11-22. Status: **implemented, unit-tested, proven on a local fork
+with only the relay faked, and then on Celo mainnet** (purchase
+[`0x34972329…53a9`](https://celoscan.io/tx/0x34972329dfa9f0011cacf8e56ace9d7b45de40ffa174f158ccc4f798bd3953a9),
+22 Nov 2026; see "What the first funded mainnet attempt had to check" below).
+Off by default in code; opt in with `AUTUMN_SUBMITTER=direct-prepared`. The
+live deployment runs it, with the agent wallet
+`0x0b5B7ec235F2291396c63F4afc96599B4F70a9Dd`.
 
 Altana's relay prepares and prices the intent exactly as it does for the SDK.
 The session key signs it as the SDK would. The wallet still pays Altana's fee
@@ -366,8 +373,10 @@ Decoded with `INTENT_ABI_PARAMETER` (core/src/intent.ts). The intents are in
   checked in `core/test/unit/prepared.test.ts`), pays `0xaF08…C4bC` and has
   `expiry = 0`.
 - Only the relay lowers `paymentAmount` when it sends: 9,740 of 19,648 and
-  7,549 of 16,356 on our two purchases. Self-submitters pay
-  `paymentAmount = paymentMaxAmount`, which is what the prepared answer holds.
+  7,549 of 16,356 on our two relay-sent purchases. Self-submitters pay
+  `paymentAmount = paymentMaxAmount`, which is what the prepared answer holds;
+  so did our first self-submitted purchase, `0x3497…53a9` (16,328 of
+  16,328).
 - **The fee was paid.** Receipts show USD₮ `Transfer(wallet → 0xaF08…C4bC)` of
   exactly `paymentAmount` (19,557; 8,225). For the CELO fees, the recipient's
   balance grew by exactly `paymentAmount` in each block (0.667229954848972819
@@ -399,7 +408,7 @@ recipient and the amount, because both fields are unsigned.
 |---|---|---|---|---|---|
 | `relay` (default) | relay EOA | Altana's relay | relay fee, lowered at send (9,740 and 7,549 USD₮ base units so far) | that fee | no |
 | `direct` | agent EOA | agent EOA, CELO (313k gas on the fork) | nothing (`paymentMaxAmount = 0` is signed) | nothing | yes |
-| `direct-prepared` | agent EOA | agent EOA, CELO (340k gas on the fork) | the prepared `paymentAmount`, which equals the maximum (19,648 for our last purchase) | that amount, to `0xaF08…C4bC` | yes |
+| `direct-prepared` | agent EOA | agent EOA, CELO (340k gas on the fork; 339,272 on mainnet purchase `0x3497…53a9`) | the prepared `paymentAmount`, which equals the maximum (16,328 on `0x3497…53a9`) | that amount, to `0xaF08…C4bC` | yes |
 
 ### The relay's prepared answer
 
@@ -543,8 +552,10 @@ Tests:
    executor refuses until the pins are updated.
 5. **Fee level.** The wallet pays the prepared `paymentAmount`, which equals
    `paymentMaxAmount` (about twice what the relay charges when it sends
-   itself). Altana receives more than in relay mode while paying no gas. The
-   agent EOA pays about 340k gas in CELO. This is a decision to make, not a
+   itself: 16,328 on the self-submitted `0x3497…53a9`, against 9,740 and
+   7,549 on the two relay-sent purchases). Altana receives more than in relay
+   mode while paying no gas. The agent EOA pays about 340k gas in CELO
+   (339,272 gas, 0.06870258 CELO on `0x3497…53a9`). This is a decision to make, not a
    bug. Lowering the unsigned amount is possible but would no longer be
    "exactly as the relay prepared".
 6. **The relay is down.** Nothing is prepared, so there is no purchase, as in
@@ -553,32 +564,59 @@ Tests:
    The same section prohibits circumventing "usage limits … of the Services".
    This mode uses the Services only to prepare, and pays the fee.
 
-### What the first funded mainnet attempt must check
+### What the first funded mainnet attempt had to check
+
+The attempt was the second end-to-end run of 22 Nov 2026, against the live
+deployment, with wallet `0x88DeB13766F676C70cC27770d1fEd5c3Eb2414db`
+([mainnet-results.md](mainnet-results.md),
+[runs/e2e-report-0x88deb13766f676c70cc27770d1fed5c3eb2414db.json](runs/e2e-report-0x88deb13766f676c70cc27770d1fed5c3eb2414db.json)).
+Each item, with what it showed:
 
 1. The agent EOA is the address registered with Celo for the project, and
-   holds CELO (about 340k gas per purchase).
+   holds CELO (about 340k gas per purchase). **Yes:**
+   `0x0b5B7ec235F2291396c63F4afc96599B4F70a9Dd`, which also registered
+   ERC-8004 agent id 10098 itself
+   ([`0x66a0295d…182b`](https://celoscan.io/tx/0x66a0295db77343c5f0b05f50609f5014df5501802e71640f8230f3d127c2182b)).
 2. Set `AUTUMN_SUBMITTER=direct-prepared`, `AUTUMN_DIRECT_SUBMITTER_KEY` and
-   `AUTUMN_EXECUTION=live`.
-3. Before sending, run `quote()` once with a real active session key. The
-   session-key `wallet_prepareCalls` request has never been made by this code
-   against the real relay (it reproduces the SDK's request), so confirm that
-   the relay accepts it.
+   `AUTUMN_EXECUTION=live`. **Done** on the live deployment; its health check
+   answered `{"configured":true,"live":true}`.
+3. Before sending, run `quote()` once with a real active session key, to
+   confirm that the relay accepts the session-key `wallet_prepareCalls`
+   request this code reproduces. **Yes:** the relay prepared the purchase
+   (`paymentAmount` 16,328, maximum 16,328), which was signed and executed.
+   Asked to prepare an over-cap purchase and a call outside the allowlist,
+   the relay refused with `ExceededSpendLimit` and `UnauthorizedCall`, and
+   nothing was sent.
 4. The log has no `direct-prepared digest differs from the relay's` line for
-   that session key. If it does, find out why before relying on the mode.
-5. The receipt shows:
+   that session key. **Not checked:** the server's log was not read, so
+   whether the relay's `digest` field differed is not known from here. The
+   intent executed, so the signature verified against the digest the
+   executor computed.
+5. The receipt of
+   [`0x34972329…53a9`](https://celoscan.io/tx/0x34972329dfa9f0011cacf8e56ace9d7b45de40ffa174f158ccc4f798bd3953a9)
+   (block 83,459,683, read from forno) shows, **as expected:**
    - `from` the agent EOA and `to` the Orchestrator;
-   - `IntentExecuted(eoa, nonce, true, 0x00000000)` with the nonce on the
-     `0xa17a…` lane;
-   - `Bought(wallet)`;
-   - a USD₮ `Transfer(wallet → 0xaF08…C4bC)` of exactly `paymentAmount`;
-   - the cap spent equal to amount plus fee.
-6. `verifyTx(hash)` returns `celo_c24c5a65e5a3`, and Celo's dashboard counts
-   the transaction.
+   - `IntentExecuted` for the wallet with the nonce on the `0xa17a…` lane,
+     counter 0, incremented, error 0;
+   - `Bought(0x88De…14db, 1,000,000, 280)`;
+   - a USD₮ `Transfer(wallet → 0xaF08…C4bC)` of 16,328, exactly
+     `paymentAmount`;
+   - the cap spent equal to amount plus fee: 1.016328 of 1.05 USD₮.
+6. `verifyTx(hash)` returns `celo_c24c5a65e5a3`. **Yes:**
+   `{"codes":["celo_c24c5a65e5a3"],"schemaId":0}`; the tag ends the outer
+   calldata and is in 2 of 2 inner calls. Whether Celo's dashboard counts the
+   transaction was not checked from here.
 7. Gas used and the CELO cost, compared with the fork's 339,678 gas.
+   **339,272 gas** at 202.5 gwei, 0.06870258 CELO, a plain CELO-paid
+   (EIP-1559) transaction.
+
+The revoke (`0x7f30def9…f692`) then stopped the plan, and a purchase
+attempted afterwards was refused before anything was prepared or sent
+(`session_ended`).
 
 ### Which mode for the hackathon
 
-**`direct-prepared`**, once item 3 above works on mainnet:
+**`direct-prepared`**, which the live deployment runs since 22 Nov 2026:
 
 - Celo's requirement holds: tag last, sent by our agent EOA. It is the same
   shape as the credited `0xaaab…` and `0x6272…`.

@@ -31,12 +31,14 @@ export function relayFeeVerdict(quote: { fee: bigint; feeToken: Address }, allow
 export const POOL_FEE_BPS = BigInt(POOL_FEE / 100);
 
 /**
- * Gas a session purchase is assumed to use when estimating the relay fee
- * before any plan exists (approve + GoldBuyer.buy through the Orchestrator,
- * with signature checks and payment). A rough figure, not measured on
- * mainnet yet: the relay's own quote is what the agent checks before each buy.
+ * Gas the relay's fee for a session purchase corresponds to, used to estimate
+ * that fee before any plan exists. The fees the relay prepared for purchases
+ * on mainnet (0.016328 and 0.019648 USD₮ at about 200 gwei) work out to 1.5
+ * to 1.8 million gas at the CELO rate; the purchase itself uses about 340,000.
+ * An estimate only: the relay's own quote is what the agent checks before
+ * each buy.
  */
-export const PURCHASE_GAS_ESTIMATE = 500_000n;
+export const PURCHASE_GAS_ESTIMATE = 1_800_000n;
 
 const directoryAbi = parseAbi(["function getExchangeRate(address token) view returns (uint256 numerator, uint256 denominator)"]);
 

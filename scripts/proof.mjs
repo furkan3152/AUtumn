@@ -15,9 +15,14 @@
  *   whether that key's allowlist was exactly Autumn's (USD₮.approve,
  *   GoldBuyer.buy, the Orchestrator entry) and is still on the account
  *   (active), expired or gone (revoked);
- * - team wallets, from the list below.
+ * - who sent the outer transaction (`txFrom`): Autumn's agent wallet
+ *   (AGENT_WALLET), a known Altana relay sender, the buyer itself, or another
+ *   address;
+ * - team wallets, from the list below. The agent wallet sends purchases and
+ *   is never counted as a buyer.
  *
- * Totals (unique non-team buyers, purchases, repeat buyers, volume) are
+ * Totals (unique non-team buyers, purchases, repeat buyers, volume, senders,
+ * purchases credited by verifyTx) are
  * printed and written with every row to docs/proof/purchases.{json,csv},
  * and summarised for people in docs/usage.md (with --out: <dir>/usage.md).
  * Sends nothing and needs no key. Env: PROOF_RPC_URL (default forno),
@@ -27,6 +32,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  AGENT_WALLET,
   GOLD_BUYER,
   analyseCalldata,
   GOLD_BUYER_DEPLOY_BLOCK,
@@ -47,7 +53,19 @@ export const TEAM_WALLETS = {
   "0x53180bbC54Bc9561c08805ca4832be85345fF535": "team deployer/test",
   "0x15855ae2E04Fd00eFA45cB70D2C29E5777925429": "team owner test",
   "0xA177651FC7F9BfF0804ad123c4fdb8aa6625683C": "team end-to-end test wallet",
+  "0x88DeB13766F676C70cC27770d1fEd5c3Eb2414db": "team end-to-end test wallet 2",
 };
+
+/**
+ * EOAs that sent Autumn's relay-submitted transactions to the Orchestrator on
+ * Celo mainnet (purchases, grants, identity registrations, revokes and
+ * "Send out"), read from those transactions on 22 Nov 2026.
+ */
+const ALTANA_RELAY_SENDERS = [
+  "0xDE3136c489B3371de8180D4c94c0238150e2c5b4",
+  "0x53187EAb26Dad0e82598D4f7aC9C349665FB2Faa",
+  "0x0B479179781640C1C62FE845dCAab1689CB4985C",
+];
 
 const args = process.argv.slice(2);
 const flag = (name) => {
@@ -61,7 +79,18 @@ const outDir = flag("--out") ?? join(REPO_ROOT, "docs", "proof");
 const quiet = args.includes("--quiet");
 
 const client = core.createCeloPublicClient(rpcUrl);
-const team = new Map(Object.entries(TEAM_WALLETS).map(([a, label]) => [getAddress(a), label]));
+const agentWallet = getAddress(AGENT_WALLET);
+// The agent wallet is in this map only so that a purchase it ever made for itself would not count as a user's.
+const team = new Map([...Object.entries(TEAM_WALLETS).map(([a, label]) => [getAddress(a), label]), [agentWallet, "Autumn agent wallet"]]);
+const relaySenders = new Set(ALTANA_RELAY_SENDERS.map((a) => getAddress(a)));
+
+/** Who sent a purchase's outer transaction, in words; null when it is none of the known senders. */
+function senderLabel(from, buyer) {
+  if (from === agentWallet) return "Autumn agent wallet";
+  if (relaySenders.has(from)) return "Altana relay";
+  if (from === buyer) return "the buyer";
+  return null;
+}
 const TAG = core.ATTRIBUTION_CODE;
 const ALTANA_DELEGATION = `0xef0100${core.ALTANA_ACCOUNT_PROXY.slice(2)}`.toLowerCase();
 
@@ -183,6 +212,7 @@ async function main() {
       retry(() => client.getBlock({ blockNumber: l.blockNumber }), { label: `block ${l.blockNumber}` }),
     ]);
     const buyer = getAddress(l.args.buyer);
+    const txFrom = getAddress(tx.from);
     const cd = analyseCalldata(tx, goldBuyer);
     let verify;
     try {
@@ -203,7 +233,8 @@ async function main() {
       xaut0Out: l.args.out,
       usdtIn_display: fmtUnits(l.args.amountIn, 6),
       xaut0Out_display: fmtUnits(l.args.out, 6),
-      txFrom: getAddress(tx.from),
+      txFrom,
+      sentBy: senderLabel(txFrom, buyer) ?? txFrom,
       txTo: tx.to ? getAddress(tx.to) : null,
       route: cd.route,
       buyerKind: bf.kind,
@@ -245,6 +276,8 @@ async function main() {
     nonTeamVolumeUsdtIn: fmtUnits(sum(nonTeam, "usdtIn"), 6),
     nonTeamVolumeXaut0Out: fmtUnits(sum(nonTeam, "xaut0Out"), 6),
     purchasesCreditedByVerifyTx: rows.filter((r) => r.attribution.verifyTxCreditsUs).length,
+    purchasesSentByAgentWallet: rows.filter((r) => r.txFrom === agentWallet).length,
+    purchasesSentByAltanaRelay: rows.filter((r) => relaySenders.has(r.txFrom)).length,
     purchasesWithTagInInnerCalls: rows.filter((r) => (r.attribution.innerCallsTagged ?? 0) > 0).length,
   };
   const report = {
@@ -256,19 +289,22 @@ async function main() {
     toBlock: head,
     toBlockTime: new Date(nowTs * 1000).toISOString(),
     teamWallets: TEAM_WALLETS,
+    agentWallet,
+    altanaRelaySenders: [...relaySenders],
     totals,
     purchases: rows,
   };
 
   mkdirSync(outDir, { recursive: true });
   writeFileSync(join(outDir, "purchases.json"), toJson(report) + "\n");
-  const cols = ["block", "time", "txHash", "buyer", "team", "usdtIn", "xaut0Out", "route", "buyerKind", "autumnSession", "sessionNow", "tagInnerCalls", "tagOuter", "verifyTx"];
+  const cols = ["block", "time", "txHash", "buyer", "team", "usdtIn", "xaut0Out", "route", "txFrom", "sentBy", "buyerKind", "autumnSession", "sessionNow", "tagInnerCalls", "tagOuter", "verifyTx", "creditedByVerifyTx"];
   const csvRow = (r) =>
     [
-      r.block, r.time, r.txHash, r.buyer, r.team ?? "", r.usdtIn_display, r.xaut0Out_display, r.route, r.buyerKind,
+      r.block, r.time, r.txHash, r.buyer, r.team ?? "", r.usdtIn_display, r.xaut0Out_display, r.route, r.txFrom, r.sentBy, r.buyerKind,
       r.signingKey?.autumnAllowlist ?? "", r.signingKey?.statusNow ?? "",
       r.attribution.innerCallsTagged ?? "", r.attribution.outerCalldataEndsWithTag,
       r.attribution.verifyTx === null ? "null" : (r.attribution.verifyTx.codes ?? [r.attribution.verifyTx.error]).join("|"),
+      r.attribution.verifyTxCreditsUs,
     ].map((v) => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v))).join(",");
   writeFileSync(join(outDir, "purchases.csv"), [cols.join(","), ...rows.map(csvRow)].join("\n") + "\n");
   // docs/usage.md by default; with --out, next to the other outputs.
@@ -286,6 +322,7 @@ async function main() {
       "USD₮ in": r.usdtIn_display,
       "XAUt0 out": r.xaut0Out_display,
       route: r.route,
+      sentBy: r.sentBy === r.txFrom ? short(r.txFrom) : r.sentBy,
       buyerKind: r.buyerKind,
       autumnKey: r.signingKey ? `${r.signingKey.autumnAllowlist ?? "?"} (${r.signingKey.statusNow})` : "",
       tagInner: r.attribution.innerCallsTagged ?? "-",
@@ -330,6 +367,8 @@ function usageMarkdown(report) {
     `| Team test purchases (not counted as users) | ${totals.teamPurchases} (${teamVolume} USD₮) |`,
     `| Purchases whose signing key carried Autumn's allowlist | ${withAutumnKey} of ${totals.purchases} (independent: ${totals.nonTeamPurchasesWithAutumnSession}) |`,
     `| Purchases credited to our attribution tag by Celo's \`verifyTx\` | ${totals.purchasesCreditedByVerifyTx} of ${totals.purchases} |`,
+    `| Purchases sent by Autumn's agent wallet | ${totals.purchasesSentByAgentWallet} of ${totals.purchases} |`,
+    `| Purchases sent by Altana's relay | ${totals.purchasesSentByAltanaRelay} of ${totals.purchases} |`,
     "",
   ];
   if (totals.uniqueNonTeamBuyers === 0) {
@@ -342,20 +381,28 @@ function usageMarkdown(report) {
   }
   lines.push("## Team wallets", "", "Purchases from these addresses are team tests.", "");
   for (const [a, label] of Object.entries(report.teamWallets)) lines.push(`- ${addrLink(a)}: ${label}`);
-  lines.push("", "## Purchases", "");
+  lines.push(
+    "",
+    `Autumn's agent wallet, ${addrLink(report.agentWallet)}, sends purchases (the outer transaction) and pays their gas. It is a sender, not a buyer, and is not counted as a user.`,
+    "",
+    "## Purchases",
+    "",
+  );
   if (rows.length === 0) {
     lines.push("None.");
   } else {
     lines.push(
-      "| Time (UTC) | Buyer | USD₮ in | XAUt0 out | Route | Signing session key now | Team | Transaction |",
-      "|---|---|---|---|---|---|---|---|",
+      "| Time (UTC) | Buyer | USD₮ in | XAUt0 out | Route | Sent by | Signing session key now | Credited by `verifyTx` | Team | Transaction |",
+      "|---|---|---|---|---|---|---|---|---|---|",
     );
     for (const r of rows) {
       const key = r.signingKey
         ? `${r.signingKey.autumnAllowlist === true ? "Autumn allowlist" : r.signingKey.autumnAllowlist === false ? "other allowlist" : "allowlist unknown"}, ${r.signingKey.statusNow}`
         : "none (no session key)";
+      const sentBy = r.sentBy === r.txFrom ? addrLink(r.txFrom) : `${r.sentBy} (${addrLink(r.txFrom)})`;
+      const credited = r.attribution.verifyTxCreditsUs ? "yes" : r.attribution.verifyTx === null ? "no (null)" : "no";
       lines.push(
-        `| ${utc(r.time)} | ${addrLink(r.buyer)} | ${r.usdtIn_display} | ${r.xaut0Out_display} | ${r.route} | ${key} | ${r.team ?? "no"} | [${shortHash(r.txHash)}](${r.celoscan}) |`,
+        `| ${utc(r.time)} | ${addrLink(r.buyer)} | ${r.usdtIn_display} | ${r.xaut0Out_display} | ${r.route} | ${sentBy} | ${key} | ${credited} | ${r.team ?? "no"} | [${shortHash(r.txHash)}](${r.celoscan}) |`,
       );
     }
   }
