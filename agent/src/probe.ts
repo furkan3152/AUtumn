@@ -260,7 +260,7 @@ export type AdminProbeResult = {
     txHash: Hex | null;
     receipt: "success" | "reverted" | "none" | null;
     purchasesInTx: { amountIn: string; out: string }[];
-    /** Purchases by the wallet from the block before the probe to the block after it. */
+    /** Purchases by the wallet made after the probe began. */
     purchasesDuringProbe: { txHash: Hex; amountIn: string; out: string }[];
   };
   sessionBefore: SessionView;
@@ -364,8 +364,9 @@ export async function runAdminProbe(deps: AdminProbeDeps, body: unknown): Promis
     receipt = facts === null ? "none" : facts.succeeded ? "success" : "reverted";
     inTx = ((await deps.chain.purchasesInTx(r.txHash)) ?? []).filter((p) => p.buyer === plan.walletAddress);
   }
-  const during = (await deps.chain.purchasesSince(headBefore.timestamp - 60)).filter(
-    (p) => p.buyer === plan.walletAddress && p.timestamp <= headAfter.timestamp + 60,
+  // Strictly after the probe began: a purchase the plan made just before the probe is not the probe's doing.
+  const during = (await deps.chain.purchasesSince(headBefore.timestamp)).filter(
+    (p) => p.buyer === plan.walletAddress && p.timestamp > headBefore.timestamp && p.timestamp <= headAfter.timestamp + 60,
   );
   const unchanged = balancesAfter.usdt === balancesBefore.usdt && balancesAfter.xaut0 === balancesBefore.xaut0 && balancesAfter.celo === balancesBefore.celo;
   return {

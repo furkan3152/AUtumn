@@ -1,0 +1,178 @@
+{
+  "version": 1,
+  "wallet": "0xA177651FC7F9BfF0804ad123c4fdb8aa6625683C",
+  "steps": {
+    "preflight": {},
+    "wallet": {
+      "status": "passed",
+      "passedAt": "2026-11-22T12:25:22.825Z"
+    },
+    "plan": {
+      "grantQuote": [
+        {
+          "kind": "account",
+          "fee": "67103",
+          "feeToken": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+          "value": "20338743624034995950"
+        }
+      ],
+      "balancesBeforeGrant": {
+        "usdt": "4200000",
+        "xaut0": "0",
+        "celo": "24000000000000000000",
+        "blockNumber": "83449563"
+      },
+      "grantStatus": "granted",
+      "grantFacts": {
+        "block": "83449571",
+        "keysRegistered": [
+          {
+            "keyId": "0xbdaf29eb63159c19a90fed5bfb790d3476799ca646ee9594a702621ac558058a",
+            "isRoot": true
+          },
+          {
+            "keyId": "0x8b1aff8fb1c3eca05c1d63c0372afcd76d51ac1623f40dc620afd10a5465e619",
+            "isRoot": false
+          }
+        ],
+        "celoSpent": "18489766930940905410",
+        "usdtSpent": "31157"
+      },
+      "status": "passed",
+      "passedAt": "2026-11-22T12:25:46.101Z"
+    },
+    "tick": {
+      "lastReport": {
+        "planId": "de020343-1e17-46e9-bcfb-2e3de7f76922",
+        "decision": "bought",
+        "slot": "weekly",
+        "txHash": "0xe6f4f902d68a8897be76c11eae1a96e483e749624ff3f103b749399fd75cc785",
+        "amountIn": "1000000",
+        "out": "281"
+      },
+      "txHash": "0xe6f4f902d68a8897be76c11eae1a96e483e749624ff3f103b749399fd75cc785",
+      "purchase": {
+        "block": "83449595",
+        "amountIn": "1000000",
+        "out": "281",
+        "fee": "9740",
+        "route": "Altana Orchestrator intent",
+        "verifyTx": null,
+        "innerCallsTagged": 2,
+        "blockTime": 1795350353
+      },
+      "status": "passed",
+      "passedAt": "2026-11-22T12:25:58.236Z"
+    },
+    "tick-again": {
+      "status": "passed",
+      "passedAt": "2026-11-22T12:26:08.008Z"
+    },
+    "probes": {
+      "over-cap": {
+        "status": "sent",
+        "result": {
+          "planId": "de020343-1e17-46e9-bcfb-2e3de7f76922",
+          "kind": "over-cap",
+          "wallet": "0xA177651FC7F9BfF0804ad123c4fdb8aa6625683C",
+          "planStatus": "active",
+          "sessionBefore": {
+            "status": "active",
+            "onAccount": true,
+            "keyStoreValid": true,
+            "limitsMatchPlan": true,
+            "limitsMismatch": null,
+            "cap": {
+              "period": "day",
+              "limit": "1050000",
+              "spent": "1009740",
+              "remaining": "40260",
+              "resetsAt": 1795392000
+            },
+            "block": "83449606"
+          },
+          "balancesBefore": {
+            "usdt": "3159103",
+            "xaut0": "281",
+            "celo": "5510233069059094590",
+            "block": "83449606"
+          },
+          "attempted": true,
+          "outcome": "refused",
+          "request": {
+            "calls": [
+              {
+                "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+                "selector": "0x095ea7b3"
+              },
+              {
+                "to": "0xB279c4380557b319C42ef3B023Ac8C8b2d64B6A0",
+                "selector": "0xd6febde8"
+              }
+            ],
+            "amountIn": "2050000"
+          },
+          "failure": {
+            "kind": "cap_exceeded",
+            "message": "This purchase would go over the limit you set, so it was not made.",
+            "code": "spend_limit_exceeded",
+            "bought": "no",
+            "stopsPlan": false
+          },
+          "sdkError": {
+            "name": "AltanaError",
+            "code": "spend_limit_exceeded",
+            "message": "This session key's spending limit does not cover this in USD₮. Grant a new session key with a higher limit, as limits cannot be raised.",
+            "relayMessage": "ExceededSpendLimit(ExceededSpendLimit { token: 0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e })"
+          },
+          "onchain": {
+            "txHash": null,
+            "receipt": null,
+            "purchasesInTx": [],
+            "purchasesDuringProbe": [
+              {
+                "txHash": "0xe6f4f902d68a8897be76c11eae1a96e483e749624ff3f103b749399fd75cc785",
+                "amountIn": "1000000",
+                "out": "281"
+              }
+            ]
+          },
+          "sessionAfter": {
+            "status": "active",
+            "onAccount": true,
+            "keyStoreValid": true,
+            "limitsMatchPlan": true,
+            "limitsMismatch": null,
+            "cap": {
+              "period": "day",
+              "limit": "1050000",
+              "spent": "1009740",
+              "remaining": "40260",
+              "resetsAt": 1795392000
+            },
+            "block": "83449614"
+          },
+          "balancesAfter": {
+            "usdt": "3159103",
+            "xaut0": "281",
+            "celo": "5510233069059094590",
+            "block": "83449614"
+          },
+          "balancesUnchanged": true
+        }
+      },
+      "status": "failed",
+      "lastError": "over-cap: a purchase appeared"
+    }
+  },
+  "plan": {
+    "planId": "de020343-1e17-46e9-bcfb-2e3de7f76922",
+    "sessionPublicKey": "0x045293d0669750584efdfae57db7871cc2fea61cbc66288ca459fb2e2a48036463f0fb0eca88de27de66d428cfeb02c83f919e94cfdf85cd07b166f2d9b9ea244c",
+    "amountPerBuy": "1000000",
+    "period": "day",
+    "expiresAt": 1802607917,
+    "createdAt": 1795350317,
+    "grantTxHash": "0xfef8bc0df856fdecdd66788c48a3c702fb6957bfd601060a8fc30f717beb263b",
+    "createdBlock": "83449560"
+  }
+}
