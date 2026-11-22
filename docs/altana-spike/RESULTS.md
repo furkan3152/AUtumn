@@ -1,5 +1,7 @@
 # Altana agent-wallet de-risk spike: results
 
+Status: this is the pre-build research record of 21 Nov 2026. Later mainnet results are in [../mainnet-results.md](../mainnet-results.md).
+
 Date: 2026-11-21 (UTC). SDK `@altananetwork/sdk` 1.1.0, viem 2.x, Node 22.23.4.
 No mainnet transaction was sent. No real funds were spent. Every mainnet item below comes from a read-only `eth_call`, `eth_getCode` or `eth_getStorageAt` against `https://forno.celo.org`, from verified contract source, or from the GeckoTerminal public API.
 

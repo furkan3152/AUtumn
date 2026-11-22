@@ -1,8 +1,11 @@
-# Plan B: submit the Altana intent ourselves, with the ERC-8021 tag at the end
+# Direct submission of the Altana intent
 
-Date: 2026-11-21. Status: **works on a local fork of Celo mainnet.** No mainnet
-transaction was sent and no real funds were used. Every transaction hash below
-exists only on a local anvil fork.
+Status: implemented and proven on a local fork of Celo mainnet; off by
+default (`AUTUMN_SUBMITTER=relay`); not used by the live deployment.
+
+Date: 2026-11-21. Status: **works on a local fork of Celo mainnet.** The direct
+submitter has sent no mainnet transaction and used no real funds. Every
+transaction hash below exists only on a local anvil fork.
 
 ## Why
 
@@ -13,7 +16,7 @@ wrapper it decodes is ERC-4337 `handleOps`. Altana relay transactions call
 ends up in the middle of the calldata, and `verifyTx` returns null
 (docs/altana-spike/RESULTS.md section 7).
 
-Plan B: the agent's own EOA sends `execute(abi.encode(intent))` and appends
+Direct submission: the agent's own EOA sends `execute(abi.encode(intent))` and appends
 `toDataSuffix("celo_c24c5a65e5a3")` as the last 35 bytes. The session key
 signs the intent exactly as it does on the relay path.
 
@@ -270,8 +273,10 @@ every value above.
 - **USD₮ came from a storage write** (balance mapping slot 51). The wallet got
   100 CELO.
 - **Time:** one jump of 31 minutes before GoldBuyer was deployed, then
-  1-second blocks. The pool keeps a single oracle observation, so GoldBuyer
-  reverts `OLD` for 30 minutes after any swap. Mainnet behaves the same way.
+  1-second blocks. At the fork block the pool kept a single oracle
+  observation, so GoldBuyer reverted `OLD` for 30 minutes after any swap.
+  Mainnet behaved the same way until 22 Nov 2026, when the pool's capacity
+  was raised to 1,800 observations ([README, "Deployed on Celo mainnet"](../README.md#deployed-on-celo-mainnet)).
 - **Not exercised:** GoldBuyer on mainnet, the passkey, the relay, ERC-8004,
   and the real gas market.
 
@@ -376,8 +381,9 @@ it to move the owner's funds beyond the cap, or anywhere it could not already
 send them. It does add one route to the loss we already state: with a
 same-batch USD₮ approval and a contract of its own called back through
 `withdrawTokens`, a thief can take USD₮ up to the cap's remaining room. The
-relay fee field already allowed exactly that amount (README, "How it
-works"), so the bound is unchanged: the cap, not the allowlist.
+relay fee field already allowed exactly that amount
+([architecture.md, "The cap and the fee allowance"](architecture.md#the-cap-and-the-fee-allowance)),
+so the bound is unchanged: the cap, not the allowlist.
 
 The check therefore accepts exactly {USD₮.approve, GoldBuyer.buy, pinned
 Orchestrator any-selector}. It refuses a missing or duplicated entry, any

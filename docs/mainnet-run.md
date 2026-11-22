@@ -1,39 +1,36 @@
-# Funded mainnet run: checklist
+# Funded mainnet run: runbook and checklist
 
-This is the first run with real money. It proves what the code and tests
-cannot: the passkey ceremony, the grant, a real purchase, the refusals, and
-the revoke. Write every answer into a new file `docs/mainnet-run-<date>.md`.
-Never paste a private key, the encryption key or a database URL into it.
+This is the runbook for `scripts/e2e-mainnet.mjs` and the manual passkey
+checklist. Write the answers of a manual run into a new file
+`docs/mainnet-run-<date>.md`. Never paste a private key, the encryption key
+or a database URL into it.
 
-## What is not verified yet
+## Status after the runs of 22 Nov 2026
 
-Until this run is done, none of these has happened on any chain:
+The automated run passed every step on Celo mainnet
+([mainnet-results.md](mainnet-results.md), full record in
+[runs/e2e-report-0xa177651fc7f9bff0804ad123c4fdb8aa6625683c.json](runs/e2e-report-0xa177651fc7f9bff0804ad123c4fdb8aa6625683c.json)).
+Its wallet's admin is a private key, so it does not cover the passkey. Item
+by item:
 
-1. Creating a passkey wallet in a browser on our domain, and restoring it.
-2. `grantSession` from a passkey with a session key that only has a public
-   key on the browser side (`sessionSignerFromPublicKey`).
-3. The KeyStore registration fee actually charged in CELO, and whether the
-   relay's quote matches the 2 × fee × 1.1 the app shows for a first grant.
-4. The account storing exactly our cap, period (day or week), allowlist and
-   expiry, so `sessionLimitsMismatch` passes. The allowlist must be
-   USD₮.approve, GoldBuyer.buy and the Orchestrator any-selector entry that
-   the SDK adds (docs/direct-submit.md, "The Orchestrator entry"); this shape
-   is taken from four live Celo session keys and the fork, not from our own
-   grant.
-5. `registerAgentIdentity` for a passkey wallet (ERC-8004).
-6. A purchase through `GoldBuyer.buy` sent by the relay with our session key.
-7. The relay fee drawn from the session's USD₮ cap, and its size.
-8. The relay's refusal of a purchase over the cap, and after a revoke, and
-   the error codes the SDK reports for them.
-9. `revokeSession` with a bare public key, and `isValidKey` turning false.
-10. The "OLD" price-check refusal as the relay reports it (we match the word
-    `OLD` in the error text; the real text is unknown).
-11. The Cloudflare Cron Trigger, Neon and the route handlers in a deployment.
-12. The relay's fee quote (`quoteExecute`) for a session purchase, which the
-    agent compares with the plan's 0.05 USD₮ per-buy allowance before sending.
-13. "Send out": an admin (passkey) transfer of USD₮, XAUt0 and CELO, and the
-    one-time KeyStore registration it carries if it is the wallet's first
-    passkey transaction.
+| # | Item | Status |
+|---|---|---|
+| 1 | Creating a passkey wallet in a browser on our domain, and restoring it | **Not proven.** A wallet whose only admin key is a WebAuthn passkey made an agent purchase ([mainnet-results.md, "Passkey wallet"](mainnet-results.md#passkey-wallet)), granted and revoked with it, but the browser ceremony itself is not recorded, and restore (section 9) was not run |
+| 2 | `grantSession` with a session key known only by its public key (`sessionSignerFromPublicKey`) | **Proven with a private-key admin** (grant `0xfef8bc0d…263b`). From a passkey: grant `0xd1f9795a…be75` and revoke `0x67fc22a9…1dce` of the passkey wallet ([mainnet-results.md, "Passkey wallet"](mainnet-results.md#passkey-wallet)) |
+| 3 | The KeyStore fee charged in CELO, and the relay's quote against 2 × fee × 1.1 | **Proven.** The quote's value, 20.3387 CELO, equals 2 × 9.2449 × 1.1; 18.4898 CELO was kept after the refund |
+| 4 | The account storing exactly our cap, period, allowlist (with the Orchestrator entry) and expiry | **Proven.** `sessionLimitsMismatch` none |
+| 5 | `registerAgentIdentity` (ERC-8004) | **Proven for the private-key wallet** (agent id 10096). Not proven for a passkey wallet |
+| 6 | A purchase through `GoldBuyer.buy` sent by the relay with our session key | **Proven** (`0xe6f4f902…c785`) |
+| 7 | The relay fee drawn from the session's USD₮ cap, and its size | **Proven.** 0.00974 USD₮; session spend 1.00974 of 1.05 USD₮ |
+| 8 | The relay's refusal over the cap and after a revoke, and the SDK codes | **Proven.** `spend_limit_exceeded`; after the revoke `unknown` ("key hash … is unknown"), which Autumn classifies as `session_ended`. A call outside the allowlist gave `call_not_permitted` |
+| 9 | `revokeSession` with a bare public key, and `isValidKey` turning false | **Proven** with a private-key admin (`0xd447908b…72f5`) |
+| 10 | The "OLD" price-check refusal as the relay reports it | **Not proven.** The price check was available throughout; the real error text is still unknown |
+| 11 | A deployment's scheduler, database and route handlers | **Partly proven.** The Cloudflare Cron Trigger is not in use. The live Render deployment's route handlers (`/api/health`, plans, `/api/cron/tick`, `/api/admin/probe`) and its database worked in the run. Its in-process hourly scheduler (`AUTUMN_SCHEDULER=internal`) was not part of the run: the harness called the tick itself |
+| 12 | The relay's fee quote (`quoteExecute`) before a session purchase | **Proven indirectly.** The runner sends only after the quote is within the 0.05 USD₮ allowance, and it sent; the quoted value is not in the report |
+| 13 | "Send out" of USD₮, XAUt0 and CELO, and the KeyStore registration on a wallet's first passkey transaction | **Proven with a private-key admin** (three transfers). With a passkey, and the first-transaction registration, not proven |
+
+The app's own screens (what sections 1 to 9 below ask you to record in the
+app) were not part of the automated run.
 
 ## Automated run with a private-key wallet: `scripts/e2e-mainnet.mjs`
 
@@ -75,8 +72,8 @@ node scripts/e2e-mainnet.mjs --step probes
 | `send-out` | XAUt0, CELO, then USD₮ to `E2E_RETURN_TO` (admin key, fee in USD₮) | each transfer's receipt, the wallet's and the destination's balances at that block |
 
 Funds: about **20.4 CELO** for a new wallet (two KeyStore registrations,
-`2 × fee × 1.1`; the 10% is refunded, so about 18.4 CELO is spent at
-today's fee of 9.21 CELO per key) and **3.3 USD₮** for a 1 USD₮ daily plan
+`2 × fee × 1.1`; the 10% is refunded, so about 18.5 CELO is spent at
+the 22 Nov 2026 fee of 9.24 CELO per key) and **3.3 USD₮** for a 1 USD₮ daily plan
 (1 USD₮ of gold, which comes back in `send-out` as XAUt0, about 0.06 USD₮ of
 relay fees, and 2.05 USD₮ that the over-cap probe needs to see in the wallet
 so that only the cap can refuse it; it is not spent). The preflight reads
@@ -142,10 +139,11 @@ inner calls and `verifyTx`'s answer, flags team wallets, and writes
 ## Before you start
 
 - [ ] GoldBuyer is deployed on Celo mainnet. Note its address and block.
-- [ ] Ideally the pool's oracle has more history. Today its observation
-      cardinality is 1, so `buy` reverts "OLD" for 30 minutes after any swap
-      in the pool. The app shows "Price check not available right now, the
-      agent will retry". Without the fix, pick a quiet moment for step 4.
+- [ ] The pool's 30-minute price check is available (the harness preflight
+      reports it). Since 22 Nov 2026 the pool stores up to 1,800
+      observations; `buy` reverts "OLD" only while its oldest stored
+      observation is younger than 30 minutes. The app then shows "Price
+      check not available right now, the agent will retry".
 - [ ] The app is deployed (or running locally) with the settings from
       `web/.env.example`, `AUTUMN_EXECUTION=live`, and the migration applied.
 - [ ] `NEXT_PUBLIC_AUTUMN_RP_ID` is the domain you open the app on.
@@ -189,7 +187,8 @@ UTC day.
 - [ ] Check onchain, read-only:
   - `spendInfos(keyHash)` on the wallet: one entry, USD₮, period 2 (day),
     limit 1050000;
-  - `canExecutePackedInfos(keyHash)`: exactly USD₮ `approve` and GoldBuyer `buy`;
+  - `canExecutePackedInfos(keyHash)`: exactly USD₮ `approve`, GoldBuyer `buy`
+    and the Orchestrator any-function entry (`0x32323232`);
   - `getKey(keyHash)`: `expiry` equals the end date shown, `keyType` is 2
     (secp256k1) and `isSuperAdmin` is false;
   - KeyStore `isValidKey(wallet, keyId)` is true.
@@ -201,8 +200,8 @@ UTC day.
 
 - [ ] Trigger a run: `curl -H "Authorization: Bearer $CRON_SECRET" https://<app>/api/cron/tick`.
 - [ ] Record the full JSON answer.
-- [ ] If the decision is `skipped` with `twap_unavailable`, wait 30 minutes
-      without swaps in the pool and run it again. Record each attempt.
+- [ ] If the decision is `skipped` with `twap_unavailable`, wait and run it
+      again. Record each attempt and the error text.
 - [ ] When it says `bought`, record:
   - the transaction hash, block, and the `Bought(buyer, amountIn, out)` event;
   - XAUt0 received, and the price against the pool's mid price;
