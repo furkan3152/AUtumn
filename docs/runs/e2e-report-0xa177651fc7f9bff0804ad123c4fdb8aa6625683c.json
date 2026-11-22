@@ -325,6 +325,351 @@
           "endedAt": "2026-11-22T12:26:23.128Z"
         }
       ]
+    },
+    {
+      "startedAt": "2026-11-22T12:31:24.591Z",
+      "baseUrl": "https://autumn-gold.onrender.com",
+      "rpc": "https://forno.celo.org",
+      "amountUsdt": 1,
+      "period": "day",
+      "goldBuyer": "0xB279c4380557b319C42ef3B023Ac8C8b2d64B6A0",
+      "dryRun": false,
+      "only": null,
+      "results": [
+        {
+          "step": "preflight",
+          "status": "passed",
+          "startedAt": "2026-11-22T12:31:24.599Z",
+          "facts": [
+            {
+              "label": "server",
+              "value": "https://autumn-gold.onrender.com → 200 {\"configured\":true,\"live\":true}"
+            },
+            {
+              "label": "Celo block",
+              "value": "83449923"
+            },
+            {
+              "label": "GoldBuyer",
+              "value": "0xB279c4380557b319C42ef3B023Ac8C8b2d64B6A0 (code present)"
+            },
+            {
+              "label": "gold price (pool mid)",
+              "value": "3545.029374 USD₮ per XAUt0; 30-min price check available"
+            },
+            {
+              "label": "KeyStore fee per key",
+              "value": "9.255162992675464007 CELO (≈ 0.501485 USD₮)"
+            },
+            {
+              "label": "first grant sends",
+              "value": "10.180679291943010407 CELO for 1 key, 10% of it refunded (≈ 0.551634 USD₮)"
+            },
+            {
+              "label": "1 CELO",
+              "value": "0.054184 USD₮"
+            },
+            {
+              "label": "plan",
+              "value": "1 USD₮ per day, cap 1.05 USD₮ per day; over-cap probe 2.05 USD₮ (must be held, is not spent)"
+            },
+            {
+              "label": "needs",
+              "value": "0.05 CELO and 2.3 USD₮ in the wallet now"
+            },
+            {
+              "label": "expected cost",
+              "value": "≈ 9.255162992675464006 CELO KeyStore registration (not refundable) + 1 USD₮ of gold (kept, sent back) + ≈ 0.06 USD₮ relay fees + 0.3% pool fee"
+            },
+            {
+              "label": "wallet",
+              "value": "0xA177651FC7F9BfF0804ad123c4fdb8aa6625683C  https://celoscan.io/address/0xA177651FC7F9BfF0804ad123c4fdb8aa6625683C"
+            },
+            {
+              "label": "wallet code",
+              "value": "0xef0100c0f16888f4198f53892c53af859f673e23f26fa3"
+            },
+            {
+              "label": "balances",
+              "value": "3.159103 USD₮, 0.000281 XAUt0, 5.51023306905909459 CELO"
+            },
+            {
+              "label": "server plans for this wallet",
+              "value": "1 (0 other active)"
+            }
+          ],
+          "txs": [],
+          "endedAt": "2026-11-22T12:31:27.894Z"
+        },
+        {
+          "step": "probes",
+          "status": "passed",
+          "startedAt": "2026-11-22T12:31:27.898Z",
+          "facts": [
+            {
+              "label": "over-cap request",
+              "value": {
+                "calls": [
+                  {
+                    "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+                    "selector": "0x095ea7b3"
+                  },
+                  {
+                    "to": "0xB279c4380557b319C42ef3B023Ac8C8b2d64B6A0",
+                    "selector": "0xd6febde8"
+                  }
+                ],
+                "amountIn": "2050000"
+              }
+            },
+            {
+              "label": "over-cap outcome",
+              "value": "refused; failure {\"kind\":\"cap_exceeded\",\"message\":\"This purchase would go over the limit you set, so it was not made.\",\"code\":\"spend_limit_exceeded\",\"bought\":\"no\",\"stopsPlan\":false}"
+            },
+            {
+              "label": "over-cap SDK/relay error",
+              "value": {
+                "name": "AltanaError",
+                "code": "spend_limit_exceeded",
+                "message": "This session key's spending limit does not cover this in USD₮. Grant a new session key with a higher limit, as limits cannot be raised.",
+                "relayMessage": "ExceededSpendLimit(ExceededSpendLimit { token: 0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e })"
+              }
+            },
+            {
+              "label": "over-cap onchain",
+              "value": "nothing sent onchain (no transaction)"
+            },
+            {
+              "label": "over-cap balances",
+              "value": "server: unchanged=true; harness: before 3.159103 USD₮/0.000281 XAUt0, after 3.159103 USD₮/0.000281 XAUt0"
+            },
+            {
+              "label": "outside-allowlist request",
+              "value": {
+                "calls": [
+                  {
+                    "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+                    "selector": "0xa9059cbb"
+                  }
+                ],
+                "amountIn": null
+              }
+            },
+            {
+              "label": "outside-allowlist outcome",
+              "value": "refused; failure {\"kind\":\"call_not_permitted\",\"message\":\"The agent's key is not allowed to make this call, so nothing was sent.\",\"code\":\"call_not_permitted\",\"bought\":\"no\",\"stopsPlan\":false}"
+            },
+            {
+              "label": "outside-allowlist SDK/relay error",
+              "value": {
+                "name": "AltanaError",
+                "code": "call_not_permitted",
+                "message": "This session key is not allowed to make this call. Grant a new session key that allows it, as permissions cannot be widened.",
+                "relayMessage": "UnauthorizedCall(UnauthorizedCall { keyHash: 0xc64bdfad0204c29bafa1771c6703d3ba12e87975fb916426bc0858575f2552ce, target: 0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e, data: 0xa9059cbb000000000000000000000000a177651fc7f9bff0804ad123c4fdb8aa6625683c000000000000000000000000000000000000000000000000000000000000000063656c6f5f633234633561363565356133110080218021802180218021802180218021 })"
+              }
+            },
+            {
+              "label": "outside-allowlist onchain",
+              "value": "nothing sent onchain (no transaction)"
+            },
+            {
+              "label": "outside-allowlist balances",
+              "value": "server: unchanged=true; harness: before 3.159103 USD₮/0.000281 XAUt0, after 3.159103 USD₮/0.000281 XAUt0"
+            }
+          ],
+          "txs": [],
+          "endedAt": "2026-11-22T12:31:57.563Z"
+        },
+        {
+          "step": "identity",
+          "status": "passed",
+          "startedAt": "2026-11-22T12:31:57.564Z",
+          "facts": [
+            {
+              "label": "ERC-8004 identities owned (registry balanceOf)",
+              "value": "0"
+            },
+            {
+              "label": "registerAgentIdentity outcome",
+              "value": {
+                "status": "registered",
+                "chainId": 42220,
+                "registry": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+                "agentId": "10096",
+                "callsId": "0xfcc27053a4d06e2f0e165e8fe9d63e18433224a94a0e359edd896e705b01f64b",
+                "transactionHash": "0xe99e01a60e12f3f18e7d9b1601d7eac618f163b2195fea6ce7478a9866dae2e9"
+              }
+            },
+            {
+              "label": "agent id",
+              "value": "10096"
+            },
+            {
+              "label": "owner",
+              "value": "0xA177651FC7F9BfF0804ad123c4fdb8aa6625683C"
+            },
+            {
+              "label": "record",
+              "value": {
+                "name": "Autumn",
+                "description": "Buys a little Tether Gold (XAUt0) on a schedule, within limits written onchain.",
+                "services": [
+                  {
+                    "endpoint": "https://autumn-gold.onrender.com",
+                    "name": "web"
+                  }
+                ],
+                "registrations": []
+              }
+            },
+            {
+              "label": "8004scan",
+              "value": "https://8004scan.io/agents/celo/10096"
+            }
+          ],
+          "txs": [
+            {
+              "label": "identity transaction",
+              "hash": "0xe99e01a60e12f3f18e7d9b1601d7eac618f163b2195fea6ce7478a9866dae2e9",
+              "url": "https://celoscan.io/tx/0xe99e01a60e12f3f18e7d9b1601d7eac618f163b2195fea6ce7478a9866dae2e9"
+            }
+          ],
+          "endedAt": "2026-11-22T12:32:06.110Z"
+        },
+        {
+          "step": "revoke",
+          "status": "passed",
+          "startedAt": "2026-11-22T12:32:06.112Z",
+          "facts": [
+            {
+              "label": "revoke legs",
+              "value": "account:CONFIRMED, registry:CONFIRMED"
+            },
+            {
+              "label": "KeyStore isValidKey",
+              "value": false
+            },
+            {
+              "label": "on the account (getKey)",
+              "value": "no (KeyDoesNotExist)"
+            },
+            {
+              "label": "getKeys() lists the key",
+              "value": false
+            },
+            {
+              "label": "revoke cost",
+              "value": "0.004883 USD₮, 0 CELO"
+            },
+            {
+              "label": "server plan",
+              "value": "stopped: the owner revoked the session, 0xd447908bd5e96c246ec46435c462a5f41309794588c15ecc5a6f841629f672f5"
+            },
+            {
+              "label": "after-revoke request",
+              "value": {
+                "calls": [
+                  {
+                    "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+                    "selector": "0x095ea7b3"
+                  },
+                  {
+                    "to": "0xB279c4380557b319C42ef3B023Ac8C8b2d64B6A0",
+                    "selector": "0xd6febde8"
+                  }
+                ],
+                "amountIn": "2050000"
+              }
+            },
+            {
+              "label": "after-revoke outcome",
+              "value": "refused; failure {\"kind\":\"session_ended\",\"message\":\"The agent's key has been revoked or has expired. Set up a new plan to continue.\",\"code\":\"unknown\",\"bought\":\"no\",\"stopsPlan\":true}"
+            },
+            {
+              "label": "after-revoke SDK/relay error",
+              "value": {
+                "name": "AltanaError",
+                "code": "unknown",
+                "message": "Key hash 0xc64bdfad0204c29bafa1771c6703d3ba12e87975fb916426bc0858575f2552ce is unknown. Try again; the debug log has the whole failure.",
+                "relayMessage": "key hash 0xc64bdfad0204c29bafa1771c6703d3ba12e87975fb916426bc0858575f2552ce is unknown"
+              }
+            },
+            {
+              "label": "after-revoke onchain",
+              "value": "nothing sent onchain"
+            },
+            {
+              "label": "tick after revoke",
+              "value": "our plan is not among the 0 active plan(s)"
+            }
+          ],
+          "txs": [
+            {
+              "label": "revoke transaction",
+              "hash": "0xd447908bd5e96c246ec46435c462a5f41309794588c15ecc5a6f841629f672f5",
+              "url": "https://celoscan.io/tx/0xd447908bd5e96c246ec46435c462a5f41309794588c15ecc5a6f841629f672f5"
+            }
+          ],
+          "endedAt": "2026-11-22T12:32:41.985Z"
+        },
+        {
+          "step": "send-out",
+          "status": "passed",
+          "startedAt": "2026-11-22T12:32:41.986Z",
+          "facts": [
+            {
+              "label": "destination",
+              "value": "0x53180bbC54Bc9561c08805ca4832be85345fF535  https://celoscan.io/address/0x53180bbC54Bc9561c08805ca4832be85345fF535"
+            },
+            {
+              "label": "XAUT0 quote",
+              "value": "fee 9049 in USD₮; sending 0.000281 XAUt0 of 0.000281 XAUt0"
+            },
+            {
+              "label": "XAUT0 onchain",
+              "value": "destination +281, wallet -0.004194 USD₮ / -0.000281 XAUt0 / 0 CELO"
+            },
+            {
+              "label": "CELO quote",
+              "value": "fee 8034 in USD₮; sending 5.50023306905909459 CELO of 5.51023306905909459 CELO"
+            },
+            {
+              "label": "CELO onchain",
+              "value": "destination +5500233069059094590, wallet -0.003714 USD₮ / 0 XAUt0 / -5.50023306905909459 CELO"
+            },
+            {
+              "label": "USDT quote",
+              "value": "fee 8052 in USD₮; sending 3.119321 USD₮ of 3.131399 USD₮"
+            },
+            {
+              "label": "USDT onchain",
+              "value": "destination +3119321, wallet -3.123038 USD₮ / 0 XAUt0 / 0 CELO"
+            },
+            {
+              "label": "left in the wallet",
+              "value": "3.127685 USD₮, 0 XAUt0, 0.01 CELO"
+            }
+          ],
+          "txs": [
+            {
+              "label": "XAUT0 transfer",
+              "hash": "0x888d6c538cb5cda59bf24b9db08b50fdfbc2b8b9af2ac9a8194b781cbd0aff95",
+              "url": "https://celoscan.io/tx/0x888d6c538cb5cda59bf24b9db08b50fdfbc2b8b9af2ac9a8194b781cbd0aff95"
+            },
+            {
+              "label": "CELO transfer",
+              "hash": "0xe6a4f46eee47aba9c562cf759d11e5abd8c274e014d68f59315417437468b0e0",
+              "url": "https://celoscan.io/tx/0xe6a4f46eee47aba9c562cf759d11e5abd8c274e014d68f59315417437468b0e0"
+            },
+            {
+              "label": "USDT transfer",
+              "hash": "0x43b66a086227ceb86d9d7c8592d58da110892e957e3c0e35e2fff40730117f3c",
+              "url": "https://celoscan.io/tx/0x43b66a086227ceb86d9d7c8592d58da110892e957e3c0e35e2fff40730117f3c"
+            }
+          ],
+          "endedAt": "2026-11-22T12:33:09.324Z"
+        }
+      ]
     }
   ]
 }

@@ -45,6 +45,7 @@ const { getAddress } = viem;
 export const TEAM_WALLETS = {
   "0x53180bbC54Bc9561c08805ca4832be85345fF535": "team deployer/test",
   "0x15855ae2E04Fd00eFA45cB70D2C29E5777925429": "team owner test",
+  "0xA177651FC7F9BfF0804ad123c4fdb8aa6625683C": "team end-to-end test wallet",
 };
 
 const args = process.argv.slice(2);

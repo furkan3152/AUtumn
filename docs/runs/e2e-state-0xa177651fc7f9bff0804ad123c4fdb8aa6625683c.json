@@ -70,7 +70,7 @@
     },
     "probes": {
       "over-cap": {
-        "status": "sent",
+        "status": "passed",
         "result": {
           "planId": "de020343-1e17-46e9-bcfb-2e3de7f76922",
           "kind": "over-cap",
@@ -89,13 +89,13 @@
               "remaining": "40260",
               "resetsAt": 1795392000
             },
-            "block": "83449606"
+            "block": "83449926"
           },
           "balancesBefore": {
             "usdt": "3159103",
             "xaut0": "281",
             "celo": "5510233069059094590",
-            "block": "83449606"
+            "block": "83449926"
           },
           "attempted": true,
           "outcome": "refused",
@@ -129,13 +129,7 @@
             "txHash": null,
             "receipt": null,
             "purchasesInTx": [],
-            "purchasesDuringProbe": [
-              {
-                "txHash": "0xe6f4f902d68a8897be76c11eae1a96e483e749624ff3f103b749399fd75cc785",
-                "amountIn": "1000000",
-                "out": "281"
-              }
-            ]
+            "purchasesDuringProbe": []
           },
           "sessionAfter": {
             "status": "active",
@@ -150,19 +144,215 @@
               "remaining": "40260",
               "resetsAt": 1795392000
             },
-            "block": "83449614"
+            "block": "83449934"
           },
           "balancesAfter": {
             "usdt": "3159103",
             "xaut0": "281",
             "celo": "5510233069059094590",
-            "block": "83449614"
+            "block": "83449934"
           },
           "balancesUnchanged": true
         }
       },
-      "status": "failed",
-      "lastError": "over-cap: a purchase appeared"
+      "status": "passed",
+      "lastError": "over-cap: a purchase appeared",
+      "outside-allowlist": {
+        "status": "passed",
+        "result": {
+          "planId": "de020343-1e17-46e9-bcfb-2e3de7f76922",
+          "kind": "outside-allowlist",
+          "wallet": "0xA177651FC7F9BfF0804ad123c4fdb8aa6625683C",
+          "planStatus": "active",
+          "sessionBefore": {
+            "status": "active",
+            "onAccount": true,
+            "keyStoreValid": true,
+            "limitsMatchPlan": true,
+            "limitsMismatch": null,
+            "cap": {
+              "period": "day",
+              "limit": "1050000",
+              "spent": "1009740",
+              "remaining": "40260",
+              "resetsAt": 1795392000
+            },
+            "block": "83449941"
+          },
+          "balancesBefore": {
+            "usdt": "3159103",
+            "xaut0": "281",
+            "celo": "5510233069059094590",
+            "block": "83449941"
+          },
+          "attempted": true,
+          "outcome": "refused",
+          "request": {
+            "calls": [
+              {
+                "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+                "selector": "0xa9059cbb"
+              }
+            ],
+            "amountIn": null
+          },
+          "failure": {
+            "kind": "call_not_permitted",
+            "message": "The agent's key is not allowed to make this call, so nothing was sent.",
+            "code": "call_not_permitted",
+            "bought": "no",
+            "stopsPlan": false
+          },
+          "sdkError": {
+            "name": "AltanaError",
+            "code": "call_not_permitted",
+            "message": "This session key is not allowed to make this call. Grant a new session key that allows it, as permissions cannot be widened.",
+            "relayMessage": "UnauthorizedCall(UnauthorizedCall { keyHash: 0xc64bdfad0204c29bafa1771c6703d3ba12e87975fb916426bc0858575f2552ce, target: 0x48065fbbe25f71c9282ddf5e1cd6d6a887483d5e, data: 0xa9059cbb000000000000000000000000a177651fc7f9bff0804ad123c4fdb8aa6625683c000000000000000000000000000000000000000000000000000000000000000063656c6f5f633234633561363565356133110080218021802180218021802180218021 })"
+          },
+          "onchain": {
+            "txHash": null,
+            "receipt": null,
+            "purchasesInTx": [],
+            "purchasesDuringProbe": []
+          },
+          "sessionAfter": {
+            "status": "active",
+            "onAccount": true,
+            "keyStoreValid": true,
+            "limitsMatchPlan": true,
+            "limitsMismatch": null,
+            "cap": {
+              "period": "day",
+              "limit": "1050000",
+              "spent": "1009740",
+              "remaining": "40260",
+              "resetsAt": 1795392000
+            },
+            "block": "83449949"
+          },
+          "balancesAfter": {
+            "usdt": "3159103",
+            "xaut0": "281",
+            "celo": "5510233069059094590",
+            "block": "83449949"
+          },
+          "balancesUnchanged": true
+        }
+      },
+      "passedAt": "2026-11-22T12:31:57.562Z"
+    },
+    "identity": {
+      "outcome": {
+        "status": "registered",
+        "chainId": 42220,
+        "registry": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+        "agentId": "10096",
+        "callsId": "0xfcc27053a4d06e2f0e165e8fe9d63e18433224a94a0e359edd896e705b01f64b",
+        "transactionHash": "0xe99e01a60e12f3f18e7d9b1601d7eac618f163b2195fea6ce7478a9866dae2e9"
+      },
+      "agentId": "10096",
+      "status": "passed",
+      "passedAt": "2026-11-22T12:32:06.110Z"
+    },
+    "revoke": {
+      "txHash": "0xd447908bd5e96c246ec46435c462a5f41309794588c15ecc5a6f841629f672f5",
+      "fee": {
+        "usdt": "4883",
+        "celo": "0"
+      },
+      "serverStopped": true,
+      "probe": {
+        "planId": "de020343-1e17-46e9-bcfb-2e3de7f76922",
+        "kind": "after-revoke",
+        "wallet": "0xA177651FC7F9BfF0804ad123c4fdb8aa6625683C",
+        "planStatus": "stopped",
+        "sessionBefore": {
+          "status": "revoked",
+          "onAccount": false,
+          "keyStoreValid": false,
+          "limitsMatchPlan": false,
+          "limitsMismatch": null,
+          "cap": null,
+          "block": "83449977"
+        },
+        "balancesBefore": {
+          "usdt": "3135593",
+          "xaut0": "281",
+          "celo": "5510233069059094590",
+          "block": "83449977"
+        },
+        "attempted": true,
+        "outcome": "refused",
+        "request": {
+          "calls": [
+            {
+              "to": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+              "selector": "0x095ea7b3"
+            },
+            {
+              "to": "0xB279c4380557b319C42ef3B023Ac8C8b2d64B6A0",
+              "selector": "0xd6febde8"
+            }
+          ],
+          "amountIn": "2050000"
+        },
+        "failure": {
+          "kind": "session_ended",
+          "message": "The agent's key has been revoked or has expired. Set up a new plan to continue.",
+          "code": "unknown",
+          "bought": "no",
+          "stopsPlan": true
+        },
+        "sdkError": {
+          "name": "AltanaError",
+          "code": "unknown",
+          "message": "Key hash 0xc64bdfad0204c29bafa1771c6703d3ba12e87975fb916426bc0858575f2552ce is unknown. Try again; the debug log has the whole failure.",
+          "relayMessage": "key hash 0xc64bdfad0204c29bafa1771c6703d3ba12e87975fb916426bc0858575f2552ce is unknown"
+        },
+        "onchain": {
+          "txHash": null,
+          "receipt": null,
+          "purchasesInTx": [],
+          "purchasesDuringProbe": []
+        },
+        "sessionAfter": {
+          "status": "revoked",
+          "onAccount": false,
+          "keyStoreValid": false,
+          "limitsMatchPlan": false,
+          "limitsMismatch": null,
+          "cap": null,
+          "block": "83449986"
+        },
+        "balancesAfter": {
+          "usdt": "3135593",
+          "xaut0": "281",
+          "celo": "5510233069059094590",
+          "block": "83449986"
+        },
+        "balancesUnchanged": true
+      },
+      "status": "passed",
+      "passedAt": "2026-11-22T12:32:41.985Z"
+    },
+    "send-out": {
+      "XAUT0": {
+        "txHash": "0x888d6c538cb5cda59bf24b9db08b50fdfbc2b8b9af2ac9a8194b781cbd0aff95",
+        "amount": "281",
+        "status": "passed"
+      },
+      "CELO": {
+        "txHash": "0xe6a4f46eee47aba9c562cf759d11e5abd8c274e014d68f59315417437468b0e0",
+        "amount": "5500233069059094590",
+        "status": "passed"
+      },
+      "USDT": {
+        "txHash": "0x43b66a086227ceb86d9d7c8592d58da110892e957e3c0e35e2fff40730117f3c",
+        "amount": "3119321",
+        "status": "passed"
+      },
+      "status": "passed",
+      "passedAt": "2026-11-22T12:33:09.324Z"
     }
   },
   "plan": {
