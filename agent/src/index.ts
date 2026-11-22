@@ -15,6 +15,15 @@ export { createChainReader, createAltanaExecutor } from "./adapters.js";
 export { createProductionRunner, createProductionService, createExecutor, serverConfigFromEnv, submitterFromEnv, tickOnce, type Submitter } from "./production.js";
 export { inProcessSendLock, pgSendLock, sendLockKey, SendLockError, type SendLock } from "./sendLock.js";
 export { createDirectExecutor, type DirectExecutor, type DirectExecutorOptions, type DirectOutcome, type PreparedSubmission } from "./direct.js";
+export {
+  ALTANA_RELAY_URL,
+  createDirectPreparedExecutor,
+  type DirectPreparedExecutor,
+  type DirectPreparedExecutorOptions,
+  type RelayPreparedSubmission,
+  type RelayRequest,
+} from "./directPrepared.js";
+export type { IntentOutcome } from "./intentSubmit.js";
 export * from "./service.js";
 export {
   tryBuy,

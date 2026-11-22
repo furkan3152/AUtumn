@@ -34,6 +34,14 @@ export const QUOTER_V2: Address = "0x82825d0554fA07f7FC52Ab63c961F330fdEFa8E8";
  */
 export const ALTANA_ORCHESTRATOR: Address = "0xAF140d0416A994Aebb3fA6212B16CE6700f09751";
 
+/**
+ * Where Altana's relay asks intents to pay its fee on Celo mainnet:
+ * `paymentRecipient` of every relay-prepared intent we decoded, and both
+ * `contracts.funder` and `fees.recipient` of the relay's
+ * `wallet_getCapabilities` for 0xa4ec (read 2026-11-22).
+ */
+export const ALTANA_FEE_RECIPIENT: Address = "0xaF089b4ECA94A4B2f51D8F5668cFf244f2c6C4bC";
+
 /** The Orchestrator a session key's allowlist may name, per chain. Only Celo mainnet is supported. */
 export const ALTANA_ORCHESTRATOR_BY_CHAIN: Readonly<Record<number, Address>> = { [CELO_CHAIN_ID]: ALTANA_ORCHESTRATOR };
 

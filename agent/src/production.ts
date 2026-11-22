@@ -4,6 +4,7 @@ import type { Hex } from "viem";
 import { createAltanaExecutor, createChainReader } from "./adapters.js";
 import { parseEncryptionKey } from "./crypto.js";
 import { createDirectExecutor } from "./direct.js";
+import { createDirectPreparedExecutor } from "./directPrepared.js";
 import { pgSendLock } from "./sendLock.js";
 import type { ChainReader, SessionExecutor } from "./ports.js";
 import { createRunner, type Runner } from "./runner.js";
@@ -24,6 +25,11 @@ type Env = Record<string, string | undefined>;
  *   ERC-8021 tag at the end of the calldata (docs/direct-submit.md). Direct
  *   needs AUTUMN_DIRECT_SUBMITTER_KEY (the EOA's private key, which pays gas
  *   in CELO) and optionally AUTUMN_DIRECT_INTENT_TTL_SECS (default 600).
+ *   "direct-prepared" lets Altana's relay prepare and price the intent as
+ *   today (the wallet still pays Altana's fee), signs it with the session key,
+ *   and submits it from the same agent EOA with the tag at the end
+ *   (docs/direct-submit.md section 5). It needs AUTUMN_DIRECT_SUBMITTER_KEY
+ *   too; AUTUMN_DIRECT_INTENT_TTL_SECS does not apply (the relay sets expiry).
  */
 export function serverConfigFromEnv(env: Env = process.env): {
   databaseUrl: string;
@@ -50,14 +56,18 @@ export function serverConfigFromEnv(env: Env = process.env): {
 }
 
 /** Who sends purchases: the Altana relay (default) or the agent's own EOA. */
-export type Submitter = { kind: "relay" } | { kind: "direct"; key: Hex; intentTtlSecs?: number };
+export type Submitter =
+  | { kind: "relay" }
+  | { kind: "direct"; key: Hex; intentTtlSecs?: number }
+  | { kind: "direct-prepared"; key: Hex };
 
 export function submitterFromEnv(env: Env): Submitter {
   const raw = env.AUTUMN_SUBMITTER;
   if (raw === undefined || raw === "" || raw === "relay") return { kind: "relay" };
-  if (raw !== "direct") throw new Error('AUTUMN_SUBMITTER must be "relay" or "direct"');
+  if (raw !== "direct" && raw !== "direct-prepared") throw new Error('AUTUMN_SUBMITTER must be "relay", "direct" or "direct-prepared"');
   const key = env.AUTUMN_DIRECT_SUBMITTER_KEY;
-  if (!key || !/^0x[0-9a-fA-F]{64}$/.test(key)) throw new Error("AUTUMN_SUBMITTER=direct needs AUTUMN_DIRECT_SUBMITTER_KEY (0x + 64 hex)");
+  if (!key || !/^0x[0-9a-fA-F]{64}$/.test(key)) throw new Error(`AUTUMN_SUBMITTER=${raw} needs AUTUMN_DIRECT_SUBMITTER_KEY (0x + 64 hex)`);
+  if (raw === "direct-prepared") return { kind: "direct-prepared", key: key as Hex };
   const ttl = env.AUTUMN_DIRECT_INTENT_TTL_SECS;
   if (ttl !== undefined && !/^\d+$/.test(ttl)) throw new Error("AUTUMN_DIRECT_INTENT_TTL_SECS must be a number of seconds");
   return { kind: "direct", key: key as Hex, ...(ttl ? { intentTtlSecs: Number(ttl) } : {}) };
@@ -75,6 +85,15 @@ export function createExecutor(
   pool?: pg.Pool,
 ): SessionExecutor {
   if (c.submitter.kind === "relay") return createAltanaExecutor(c.cfg.rpcUrl);
+  if (c.submitter.kind === "direct-prepared") {
+    return createDirectPreparedExecutor({
+      rpcUrl: c.cfg.rpcUrl,
+      submitterKey: c.submitter.key,
+      goldBuyer: c.cfg.goldBuyer,
+      ...(pool ? { sendLock: pgSendLock(pool) } : {}),
+      ...(log ? { log } : {}),
+    });
+  }
   return createDirectExecutor({
     rpcUrl: c.cfg.rpcUrl,
     submitterKey: c.submitter.key,

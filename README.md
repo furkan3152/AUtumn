@@ -81,9 +81,13 @@ capacity to 1,800 observations
 - **Attribution.** Our tag `celo_c24c5a65e5a3` is attached to every agent
   call, but Celo's `verifyTx` returns null for relayed transactions, because
   it reads the tag only at the end of the outer calldata. Reported as
-  https://github.com/celo-org/attribution-tags/issues/30. A direct submitter
-  that puts the tag at the end exists ([docs/direct-submit.md](docs/direct-submit.md)),
-  is off by default, and is not used by the live deployment.
+  https://github.com/celo-org/attribution-tags/issues/30. Two submitters
+  that put the tag at the end exist
+  ([docs/direct-submit.md](docs/direct-submit.md)). `direct` builds a
+  fee-free intent itself. `direct-prepared` lets the relay prepare and price
+  the intent as today, so Altana is still paid, and sends it from the agent's
+  own address. Both are off by default, proven only on a local fork, and not
+  used by the live deployment.
 - **Fees relative to small buys.** Each buy pays the pool's 0.3% and a relay
   fee (0.0097 USD₮ and 0.0075 USD₮ on the two agent purchases so far), so
   about 1.0 to 1.3% on a 1 USD₮ buy. The first plan's KeyStore registration cost

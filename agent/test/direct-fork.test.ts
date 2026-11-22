@@ -17,7 +17,16 @@
  *   3. one purchase after revoking the key (must be refused, and when forced, must buy nothing),
  *   4. the runner end to end with this executor on the same real-shaped grant
  *      (buys once, then already_bought), and a control wallet whose session
- *      also has any-function on GoldBuyer (the runner refuses it).
+ *      also has any-function on GoldBuyer (the runner refuses it),
+ *   5. the direct-prepared executor (src/directPrepared.ts) with a relay-shaped
+ *      prepared intent: it pays Altana's fee recipient in USD₮ from the wallet,
+ *      inside the session cap, and is sent by the agent EOA with our tag last.
+ *      The relay cannot prepare against fork state, so only the relay is
+ *      faked: its answer is built the way the real relay's is (the envelope of
+ *      a real answer, USD₮ fee to 0xaF08…C4bC with paymentAmount =
+ *      paymentMaxAmount, expiry 0, the SDK's nonce lane, the pinned account
+ *      implementation, combinedGas = simulated gas + the relay's published
+ *      50,000 intent buffer). Everything else is the real chain code.
  *
  * Env: ANVIL_BIN (default ~/.foundry/bin/anvil or PATH), FORK_URL (default
  * forno), FORK_BLOCK (default latest), DIRECT_FORK_OUT (write the JSON record there).
@@ -55,9 +64,13 @@ import {
   ALTANA_KEYSTORE,
   ALTANA_KEYSTORE_CONTROLLER,
   ALTANA_ORCHESTRATOR,
+  ALTANA_FEE_RECIPIENT,
   ATTRIBUTION_CODE,
   ATTRIBUTION_SUFFIX,
   buildBuyCalls,
+  encodeExecutionData,
+  sdkLaneSeqKey,
+  simulateExecuteCalldata,
   buildSessionIntent,
   createCeloPublicClient,
   directLaneSeqKey,
@@ -77,8 +90,11 @@ import {
   XAUT0,
   wrapKeySignature,
   type Call,
+  type Intent,
 } from "@autumn/core";
 import { createDirectExecutor } from "../src/direct.js";
+import { createDirectPreparedExecutor, type RelayRequest } from "../src/directPrepared.js";
+import { decodeRevert, revertDataOf } from "../src/intentSubmit.js";
 import { createChainReader } from "../src/adapters.js";
 import { decryptSessionKey } from "../src/crypto.js";
 import { createPlan } from "../src/plans.js";
@@ -481,5 +497,118 @@ describe.skipIf(!ANVIL || !existsSync(GOLD_BUYER_ARTIFACT))("direct submitter on
     expect(control.reason).toMatch(/any function of/);
     expect(await pub.getTransactionCount({ address: direct.submitter })).toBe(sentBefore);
     record.runnerControlExtraWildcard = control;
+  }, 300_000);
+
+  it("direct-prepared: a relay-shaped intent pays Altana's recipient inside the cap and is credited to our tag", async () => {
+    const t0 = await nowTs();
+    const storage = new MemoryStorage();
+    const encryptionKey = randomBytes(32);
+    const ownerPk = generatePrivateKey();
+    const { plan, sessionPublicKey, grant } = await createPlan(
+      { storage, encryptionKey, goldBuyer, now: Number(t0) },
+      { walletAddress: privateKeyToAccount(ownerPk).address, amountPerBuy: 1_000_000n, period: "week", expiresAt: Number(t0) + 30 * 86_400, dayOfWeek: 0, hourUtc: 0 },
+    );
+    const sessionPk = decryptSessionKey((await storage.getEncryptedSessionKey(plan.id))!, plan.id, encryptionKey);
+    const w = await setUpWallet(ownerPk, sessionPublicKey, grant);
+    const session: SerializedSession = {
+      walletAddress: w.wallet, publicKey: sessionPublicKey,
+      permissions: { calls: grant.permissions.calls, spend: grant.permissions.spend.map((s) => ({ limit: s.limit.toString(), period: s.period, token: s.token! })) },
+      expiry: grant.expiry,
+    };
+    const realAnswer = JSON.parse(readFileSync(fileURLToPath(new URL("../../core/test/fixtures/relay-prepared-intents.json", import.meta.url)), "utf8")).prepareCalls.result;
+
+    /** What the relay's wallet_prepareCalls answers, built from fork state the way the relay builds it. */
+    const RELAY_FEE = 19_648n; // the relay's paymentMaxAmount for our mainnet purchase 0xe6f4…
+    const relayMethods: string[] = [];
+    const relay: RelayRequest = async (method, params) => {
+      relayMethods.push(method);
+      if (method !== "wallet_prepareCalls") throw new Error(`fork relay: ${method} is not served`);
+      const q = params[0] as { from: Address; calls: { to: Address; data: Hex; value: Hex }[]; capabilities: { meta: { feeToken: Address; nonce: Hex } } };
+      const calls: Call[] = q.calls.map((c) => ({ to: c.to, data: c.data, value: BigInt(c.value) }));
+      const intent: Intent = {
+        eoa: getAddress(q.from), executionData: encodeExecutionData(calls), nonce: BigInt(q.capabilities.meta.nonce),
+        payer: "0x0000000000000000000000000000000000000000", paymentToken: getAddress(q.capabilities.meta.feeToken),
+        paymentMaxAmount: RELAY_FEE, combinedGas: 3_000_000n, encodedPreCalls: [], encodedFundTransfers: [],
+        settler: "0x0000000000000000000000000000000000000000", expiry: 0n, isMultichain: false,
+        funder: "0x0000000000000000000000000000000000000000", funderSignature: "0x", settlerContext: "0x",
+        paymentAmount: RELAY_FEE, paymentRecipient: ALTANA_FEE_RECIPIENT,
+        signature: wrapKeySignature(`0x${"11".repeat(64)}1b`, sessionKeyIds(sessionPublicKey).keyHash), paymentSignature: "0x",
+        supportedAccountImplementation: "0x4B5d20CD8a3927B500540d9BcCDDc27385c9fA79",
+      };
+      let gUsed = 0n;
+      try {
+        await pub.call({ to: ALTANA_ORCHESTRATOR, data: simulateExecuteCalldata(intent), gas: 6_000_000n });
+      } catch (err) {
+        const r = decodeRevert(revertDataOf(err));
+        if (r.name !== "SimulationPassed") throw new Error(`fork relay: simulation failed: ${r.text}`);
+        gUsed = r.args?.[0] as bigint;
+      }
+      const hex = (v: bigint) => `0x${v.toString(16)}`;
+      const answer = structuredClone(realAnswer);
+      answer.context.quote.quotes[0].intent = {
+        ...intent, eoa: intent.eoa.toLowerCase(), nonce: hex(intent.nonce), paymentMaxAmount: hex(RELAY_FEE), paymentAmount: hex(RELAY_FEE),
+        combinedGas: hex(gUsed + 50_000n), expiry: "0x0", signature: "0x", paymentToken: intent.paymentToken.toLowerCase(),
+        paymentRecipient: ALTANA_FEE_RECIPIENT.toLowerCase(), supportedAccountImplementation: intent.supportedAccountImplementation.toLowerCase(),
+      };
+      return answer;
+    };
+
+    await mine(5);
+    const q = await quoteBuy(coreClient, 1_000_000n);
+    expect(q.twapTick).not.toBeNull();
+    const calls = buildBuyCalls(1_000_000n, q.minOut, goldBuyer);
+    const ex = createDirectPreparedExecutor({ rpcUrl: rpc, submitterKey: agentKey, goldBuyer, relayRequest: relay });
+    const keyHash = sessionKeyIds(sessionPublicKey).keyHash;
+    const laneBefore = await pub.readContract({ address: w.wallet, abi: ithacaAccountNonceAbi, functionName: "getNonce", args: [sdkLaneSeqKey(keyHash)] });
+
+    // Quote: the relay's fee, for the runner's allowance check.
+    expect(await ex.quote({ session, privateKey: sessionPk, calls })).toEqual({ fee: RELAY_FEE, feeToken: USDT });
+    const [walletUsdt0, altanaUsdt0] = [await usdtOf(w.wallet), await usdtOf(ALTANA_FEE_RECIPIENT)];
+    const r = await ex.execute({ session, privateKey: sessionPk, calls });
+    const o = ex.lastOutcome()!;
+    expect(r.status).toBe("CONFIRMED");
+    expect(o.bought?.amountIn).toBe(1_000_000n);
+    expect(o.intentExecuted).toMatchObject({ incremented: true, err: "0x00000000" });
+    // Altana is paid by the wallet, exactly the prepared amount; the purchase and the fee both count against the session cap.
+    expect(await usdtOf(w.wallet)).toBe(walletUsdt0 - 1_000_000n - RELAY_FEE);
+    expect(await usdtOf(ALTANA_FEE_RECIPIENT)).toBe(altanaUsdt0 + RELAY_FEE);
+    const after = await readSessionState(coreClient, { wallet: w.wallet, publicKey: sessionPublicKey, blockNumber: await pub.getBlockNumber() });
+    expect(after.usdtCap?.spent).toBe(1_000_000n + RELAY_FEE);
+    // Sent by the agent EOA, tag last, on the SDK's lane for the key.
+    const tx = await pub.getTransaction({ hash: r.transactionHash! });
+    expect(getAddress(tx.from)).toBe(ex.submitter);
+    expect(getAddress(tx.to!)).toBe(getAddress(ALTANA_ORCHESTRATOR));
+    expect(tx.input.toLowerCase().endsWith(ATTRIBUTION_SUFFIX.slice(2).toLowerCase())).toBe(true);
+    const verified = await verifyTx({ client: coreClient, hash: r.transactionHash! });
+    expect(verified?.codes).toEqual([ATTRIBUTION_CODE]);
+    const laneAfter = await pub.readContract({ address: w.wallet, abi: ithacaAccountNonceAbi, functionName: "getNonce", args: [sdkLaneSeqKey(keyHash)] });
+    expect(laneAfter).toBe(laneBefore + 1n);
+    expect(relayMethods).toEqual(["wallet_prepareCalls"]); // quote's intent was signed; nothing but prepare reached the relay
+
+    // A prepared fee the cap cannot hold: even with the executor's own ceiling raised, the account refuses it in the preflight.
+    await advance(31 * 60);
+    const q2 = await quoteBuy(coreClient, 10_000n);
+    const sentBefore = await pub.getTransactionCount({ address: ex.submitter });
+    const bigFee = 40_000n; // 1.019648 spent + 0.01 buy + 0.04 fee > 1.05 cap
+    const relayBig: RelayRequest = async (m, p) => {
+      const a = (await relay(m, p)) as { context: { quote: { quotes: { intent: Record<string, unknown> }[] } } };
+      a.context.quote.quotes[0]!.intent.paymentMaxAmount = `0x${bigFee.toString(16)}`;
+      a.context.quote.quotes[0]!.intent.paymentAmount = `0x${bigFee.toString(16)}`;
+      return a;
+    };
+    const overCap = createDirectPreparedExecutor({ rpcUrl: rpc, submitterKey: agentKey, goldBuyer, relayRequest: relayBig, maxFeePerBuy: 10n ** 9n });
+    const refused = await overCap.execute({ session, privateKey: sessionPk, calls: buildBuyCalls(10_000n, q2.minOut > 0n ? q2.minOut : 1n, goldBuyer) }).then(() => null, (e) => e as Error & { kind?: string; bought?: string });
+    expect(refused?.name).toBe("DirectSubmitError");
+    expect(refused?.kind).toBe("cap_exceeded");
+    expect(refused?.bought).toBe("no");
+    expect(await pub.getTransactionCount({ address: ex.submitter })).toBe(sentBefore);
+
+    record.directPrepared = {
+      wallet: w.wallet, tx: r.transactionHash, from: tx.from, to: tx.to, gasUsed: o.gasUsed, intentExecuted: o.intentExecuted, bought: o.bought,
+      relayFee: RELAY_FEE, walletUsdtDelta: -(1_000_000n + RELAY_FEE), altanaRecipientUsdtDelta: RELAY_FEE, capSpentAfter: after.usdtCap?.spent,
+      nonceBefore: `0x${laneBefore.toString(16)}`, nonceAfter: `0x${laneAfter.toString(16)}`,
+      inputBytes: (tx.input.length - 2) / 2, last35Bytes: `0x${tx.input.slice(-70)}`, verifyTx: verified,
+      overCapFee: { fee: bigFee, error: refused?.message, kind: refused?.kind, sent: false },
+    };
   }, 300_000);
 });

@@ -71,7 +71,7 @@ adapter (`@opennextjs/cloudflare`). The config is in `web/wrangler.jsonc`,
    npx wrangler secret put AUTUMN_GOLD_BUYER_ADDRESS
    npx wrangler secret put AUTUMN_GOLD_BUYER_DEPLOY_BLOCK
    # optional: AUTUMN_CELO_RPC_URL, AUTUMN_LOGS_BLOCK_RANGE,
-   # AUTUMN_SUBMITTER=direct with AUTUMN_DIRECT_SUBMITTER_KEY (docs/direct-submit.md)
+   # AUTUMN_SUBMITTER=direct or direct-prepared with AUTUMN_DIRECT_SUBMITTER_KEY (docs/direct-submit.md)
    ```
 
    `AUTUMN_EXECUTION` is a plain variable in `wrangler.jsonc` (`dry-run`).
