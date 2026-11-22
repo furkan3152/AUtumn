@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as Key from "porto/viem/Key";
 import {
   chooseRequestKind,
+  isAndroid,
   readPlatformCapabilities,
   selectionCreateFn,
   withAuthenticatorSelection,
@@ -50,6 +51,17 @@ describe("creation request by capability", () => {
   it("capabilities unknown: preferred", () => {
     expect(selectionSent("auto", { passkeyPlatformAuthenticator: undefined, userVerifyingPlatformAuthenticator: true })).toEqual(PREFERRED);
     expect(selectionSent("auto", { passkeyPlatformAuthenticator: undefined, userVerifyingPlatformAuthenticator: undefined })).toEqual(PREFERRED);
+  });
+
+  it("Android: device-bound by default even when a passkey provider is reported, preferred when the owner asks for a synced passkey", () => {
+    const reported = { passkeyPlatformAuthenticator: true, userVerifyingPlatformAuthenticator: true };
+    const sent = (mode: CreationMode) =>
+      withAuthenticatorSelection(portoCreationOptions(), chooseRequestKind(mode, reported, { android: true })).publicKey!.authenticatorSelection;
+    expect(sent("auto")).toEqual(DEVICE);
+    expect(sent("device")).toEqual(DEVICE);
+    expect(sent("synced")).toEqual(PREFERRED);
+    expect(isAndroid("Mozilla/5.0 (Linux; Android 15; K) AppleWebKit/537.36 Chrome/142.0 Mobile Safari/537.36")).toBe(true);
+    expect(isAndroid("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1")).toBe(false);
   });
 
   it("forced device mode: device-bound platform request whatever is reported", () => {

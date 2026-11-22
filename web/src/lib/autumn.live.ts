@@ -86,6 +86,7 @@ import {
   browserGetFn,
   hasWebAuthn,
   chooseRequestKind,
+  isAndroid,
   passkeyFailure,
   readPlatformCapabilities,
   selectionCreateFn,
@@ -905,7 +906,7 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
       if (!hasWebAuthn()) throw unsupportedPasskeys("create");
       // residentKey "preferred" instead of porto's "required", or the device-bound request when the browser reports no
       // passkey provider or the owner chose it: see passkey.ts. Everything else porto sets is kept.
-      const kind = chooseRequestKind(options?.mode ?? "auto", await platformCapabilities());
+      const kind = chooseRequestKind(options?.mode ?? "auto", await platformCapabilities(), { android: isAndroid() });
       let discoverable: Discoverable = "unknown";
       const createFn = selectionCreateFn(browserCreateFn(), kind, (d) => (discoverable = d));
       let w: Awaited<ReturnType<Client["createPasskeyWallet"]>>;

@@ -22,7 +22,7 @@ import {
 import { publicConfig } from "./env";
 import type { CreationMode, Discoverable } from "./passkey";
 
-export { PasskeyError, type PasskeyFailureReason, type PasskeyStep, type Discoverable, type CreationMode } from "./passkey";
+export { PasskeyError, isAndroid, type PasskeyFailureReason, type PasskeyStep, type Discoverable, type CreationMode } from "./passkey";
 export { BackupCodeError, BACKUP_CODE_PREFIX } from "./backupCode";
 
 export type { PlanPeriod, SendAsset };

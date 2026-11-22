@@ -1,7 +1,7 @@
 "use client";
 
-import { useId, useState } from "react";
-import { CUSTODY_TEXT, LIMITS_TEXT, type AutumnClient, type CreationMode, type FeeFacts, type GoldPrice, type Registration, type Wallet } from "@/lib/autumn";
+import { useEffect, useId, useState } from "react";
+import { CUSTODY_TEXT, LIMITS_TEXT, isAndroid, type AutumnClient, type CreationMode, type FeeFacts, type GoldPrice, type Registration, type Wallet } from "@/lib/autumn";
 import { formatDateTime, perGram, usdt } from "@/lib/format";
 import { errorText } from "@/lib/useAutumn";
 import { Logo } from "../Logo";
@@ -38,6 +38,10 @@ export function Landing(props: LandingProps) {
   const [busy, setBusy] = useState<null | "create" | "restore" | "code">(null);
   const [error, setError] = useState<{ kind: "create" | "restore"; mode: CreationMode; e: unknown } | null>(null);
   const [codeOpen, setCodeOpen] = useState(false);
+  // On Android the main button makes a passkey behind this phone's screen lock (see passkey.ts); the link offers
+  // the account-saved kind instead. Read after mount so the server and the first client render agree.
+  const [android, setAndroid] = useState(false);
+  useEffect(() => setAndroid(isAndroid()), []);
   const [code, setCode] = useState("");
   const [codeError, setCodeError] = useState<string | null>(null);
   const codeId = useId();
@@ -162,9 +166,18 @@ export function Landing(props: LandingProps) {
               "Create wallet with passkey"
             )}
           </Button>
-          <button type="button" className="textlink" onClick={() => run("create", "device")} disabled={busy !== null}>
-            My phone only offers another device
-          </button>
+          {android ? (
+            <>
+              <p className="muted small">On Android the passkey is made with this phone&apos;s screen lock and lives on this phone only.</p>
+              <button type="button" className="textlink" onClick={() => run("create", "synced")} disabled={busy !== null}>
+                Save the passkey to my Google account instead
+              </button>
+            </>
+          ) : (
+            <button type="button" className="textlink" onClick={() => run("create", "device")} disabled={busy !== null}>
+              My device only offers another device
+            </button>
+          )}
           <Button variant="plain" block onClick={() => run("restore")} disabled={busy !== null}>
             {busy === "restore" ? (
               <>

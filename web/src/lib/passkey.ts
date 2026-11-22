@@ -71,8 +71,9 @@ export const DEVICE_AUTHENTICATOR_SELECTION = {
 /**
  * - "auto": choose from what the browser reports (`chooseRequestKind`).
  * - "device": always the device-bound request, for phones that report a passkey provider they cannot use.
+ * - "synced": always the "preferred" request, for an owner who wants the passkey saved to their account.
  */
-export type CreationMode = "auto" | "device";
+export type CreationMode = "auto" | "device" | "synced";
 /** Which creation request is sent: "preferred" (`AUTUMN_AUTHENTICATOR_SELECTION`) or "device" (`DEVICE_AUTHENTICATOR_SELECTION`). */
 export type RequestKind = "preferred" | "device";
 
@@ -89,8 +90,13 @@ export type PlatformCapabilities = {
  * says no passkey platform authenticator is available while a user-verifying
  * platform authenticator is. Anything unknown keeps "preferred".
  */
-export function chooseRequestKind(mode: CreationMode, caps: PlatformCapabilities): RequestKind {
+export function chooseRequestKind(mode: CreationMode, caps: PlatformCapabilities, platform: { android?: boolean } = {}): RequestKind {
   if (mode === "device") return "device";
+  if (mode === "synced") return "preferred";
+  // Chrome on Android reports a passkey platform authenticator even on phones where no provider can store one
+  // (measured on a real phone: "preferred" only offered another device, the device-bound request worked with the
+  // fingerprint). The device-bound request works on every Android phone with a screen lock, so it is the default there.
+  if (platform.android) return "device";
   if (caps.passkeyPlatformAuthenticator === false && caps.userVerifyingPlatformAuthenticator === true) return "device";
   return "preferred";
 }
@@ -308,4 +314,9 @@ export function unsupportedPasskeys(step: PasskeyStep): PasskeyError {
 /** Whether this browser exposes WebAuthn. */
 export function hasWebAuthn(): boolean {
   return typeof window !== "undefined" && typeof window.PublicKeyCredential !== "undefined" && !!navigator.credentials;
+}
+
+/** True in a browser on Android. */
+export function isAndroid(userAgent: string | undefined = typeof navigator === "undefined" ? undefined : navigator.userAgent): boolean {
+  return /Android/i.test(userAgent ?? "");
 }
