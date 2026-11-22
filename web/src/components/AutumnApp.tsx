@@ -11,7 +11,7 @@ import { Deposit } from "./screens/Deposit";
 import { PlanPicker } from "./screens/PlanPicker";
 import { Home } from "./screens/Home";
 import { SendOut } from "./screens/SendOut";
-import { ConvertCelo } from "./screens/ConvertCelo";
+import { Convert } from "./screens/Convert";
 import { BackupCode } from "./screens/BackupCode";
 import { errorText } from "@/lib/useAutumn";
 import { TxLink } from "./ui";
@@ -166,7 +166,7 @@ function Screen({
   if (view === "backup-new") return <BackupCode client={client} onDone={back} deviceBound={deviceBound} />;
   if (view === "backup") return <BackupCode client={client} onDone={back} onBack={back} deviceBound={deviceBound} />;
   if (view === "send") return <SendOut client={client} state={state} onBack={back} {...(state.plan ? { goldBuyer: state.plan.proof.calls[1]!.contract } : {})} />;
-  if (view === "convert") return <ConvertCelo client={client} state={state} onBack={back} />;
+  if (view === "convert") return <Convert client={client} state={state} onBack={back} />;
   if (view === "deposit") return <Deposit client={client} state={state} onBack={back} onSendOut={onSendOut} onConvert={onConvert} onBackupCode={onBackupCode} />;
   if (view === "plan" && isFunded(state)) return <PlanPicker client={client} state={state} onDone={back} onBack={back} />;
   if (view === "plan")

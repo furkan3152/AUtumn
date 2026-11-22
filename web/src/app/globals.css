@@ -2010,6 +2010,12 @@ body:has(.landing) .main {
   gap: 12px;
 }
 
+.convert__flip {
+  display: flex;
+  justify-content: center;
+  margin-top: 18px;
+}
+
 /* ---------- Onchain proof ---------- */
 
 .proof summary {

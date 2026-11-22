@@ -225,9 +225,9 @@ export function Home({
           <Button variant="plain" onClick={onSendOut}>
             Send out
           </Button>
-          {b && b.celo > 0n && (
+          {b && (b.celo > 0n || b.usdt > 0n || b.gold > 0n) && (
             <Button variant="plain" onClick={onConvert}>
-              Convert CELO to USD₮
+              Convert
             </Button>
           )}
         </div>

@@ -34,10 +34,14 @@ import {
   decodeSwapCalls,
   erc20Abi,
   lowestAllowedMinOut,
-  quoteCeloToUsdt,
-  swapFeeInUsdt,
-  CELO_TOKEN,
+  quoteSwapRoute,
+  routeFeeText,
+  swapBalanceOf,
+  swapRoute,
+  NoGoldAverageError,
   SWAP_ROUTER_02,
+  SWAP_TOKEN,
+  type SwapAsset,
   createCeloPublicClient,
   ALTANA_ORCHESTRATOR,
   altanaAccountAbi,
@@ -93,9 +97,8 @@ import {
   type TxHash,
   type Wallet,
   SwapUnavailableError,
-  swapKeepAndMax,
+  SWAP_ASSET_LABEL,
 } from "./autumn";
-import { usdt as usdtText } from "./format";
 import { passkeyOriginProblem, type PublicConfig } from "./env";
 import { BackupCodeError, decodeBackupCode, encodeBackupCode, webAuthnKeyHash } from "./backupCode";
 import {
@@ -222,7 +225,7 @@ const swapPending = (ref: { txHash?: TxHash; callsId?: string }, what: string) =
     `${what} Do not convert again: ${ref.txHash ? "check the transaction on Celoscan, or" : "the relay is still working on it;"} tap "Check again" in a minute.`,
     ref,
   );
-const SWAP_UNREADABLE = "Celo's reference rate or the pool's quote could not be read right now, so converting is unavailable. Nothing was sent. Try again in a minute.";
+const SWAP_UNREADABLE = "A reference price or the pool's quote could not be read right now, so converting is unavailable. Nothing was sent. Try again in a minute.";
 const errText = (e: unknown) => (e instanceof Error && e.message ? e.message : String(e));
 
 export function createLiveClient(cfg: PublicConfig): AutumnClient {
@@ -1375,61 +1378,68 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     return confirmSent(req, wallet.address, txHash, 15_000);
   }
 
-  /* ---------- Converting CELO to USD₮ ---------- */
+  /* ---------- Converting between CELO, USD₮ and gold ---------- */
 
-  /** The pool's quote for `amountIn` at block `bn`, checked against the reference rate. Unreadable or refused: unavailable. */
-  async function checkedPoolQuote(amountIn: bigint, bn?: bigint) {
-    let pq: Awaited<ReturnType<typeof quoteCeloToUsdt>>;
+  /** The pool's quote at block `bn`, checked against the reference prices. Unreadable, no gold average or refused: unavailable. */
+  async function checkedPoolQuote(from: SwapAsset, to: SwapAsset, amountIn: bigint, bn?: bigint) {
+    let pq: Awaited<ReturnType<typeof quoteSwapRoute>>;
     try {
-      pq = await quoteCeloToUsdt(pub, amountIn, bn !== undefined ? { blockNumber: bn } : {});
-    } catch {
+      pq = await quoteSwapRoute(pub, from, to, amountIn, bn !== undefined ? { blockNumber: bn } : {});
+    } catch (e) {
+      if (e instanceof NoGoldAverageError) throw new SwapUnavailableError("no-average", `Converting gold is unavailable: ${e.message}. Nothing was sent. Try again later.`);
       throw new SwapUnavailableError("unreadable", SWAP_UNREADABLE);
     }
-    if (!pq.ok) throw new SwapUnavailableError("price", `Converting is unavailable right now: ${pq.reason}. Nothing was sent.`);
+    if (!pq.ok) throw new SwapUnavailableError("price", `${pq.reason[0]!.toUpperCase()}${pq.reason.slice(1)}. Nothing was sent.`);
     return pq as typeof pq & { ok: true; minOut: bigint };
   }
 
-  async function quoteSwap(req: { amount?: bigint }): Promise<SwapQuote> {
+  /** A stand-in amount for quoting fees and Max before one is typed: a few dollars' worth at most, or half the balance. */
+  const PROBE: Record<SwapAsset, bigint> = { CELO: 10n ** 19n, USDT: 1_000_000n, XAUT0: 1_000n };
+
+  async function quoteSwap(req: { from: SwapAsset; to: SwapAsset; amount?: bigint }): Promise<SwapQuote> {
     const { wallet, signer } = admin();
+    const { from, to } = req;
+    const route = swapRoute(from, to);
     let b: Awaited<ReturnType<typeof readBalances>>;
     let reg: Awaited<ReturnType<typeof readRegistration>>;
     try {
       const bn = await pinnedBlock(pub);
       [b, reg] = await Promise.all([readBalances(pub, wallet.address, bn), readRegistration(pub, wallet.address, bn)]);
     } catch {
-      throw new SwapUnavailableError("unreadable", "Your CELO balance and Altana's registration fee could not be read from Celo right now. Try again in a minute.");
+      throw new SwapUnavailableError("unreadable", "Your balances and Altana's registration fee could not be read from Celo right now. Try again in a minute.");
     }
-    if (b.celo === 0n) throw new Error("The wallet holds no CELO to convert.");
+    const balance = swapBalanceOf(b, from);
+    if (balance === 0n) throw new Error(`The wallet holds no ${SWAP_ASSET_LABEL[from] === "Gold" ? "gold" : SWAP_ASSET_LABEL[from]} to convert.`);
     const probe = !(req.amount && req.amount > 0n);
-    // Before an amount is entered, 1 CELO (or half the balance) stands in: the fee hardly depends on the amount.
-    const amountIn = probe ? (b.celo >= 2n * 10n ** 18n ? 10n ** 18n : b.celo / 2n) : req.amount!;
-    const pq = await checkedPoolQuote(amountIn, b.blockNumber);
-    const calls = buildSwapCalls(wallet.address, amountIn, pq.minOut);
-    // The fee in USD₮ when the wallet holds enough of it, otherwise in CELO.
-    const quoteWith = (feeToken: Address) => sdkClient().quoteExecute({ wallet, signer, calls, feeToken, chainId: CELO_CHAIN_ID, agentIdentity: false });
-    let q: Awaited<ReturnType<typeof quoteWith>> | null = null;
-    if (b.usdt > 0n) {
-      const inUsdt = await quoteWith(USDT).catch(() => null);
-      if (inUsdt && inUsdt.feeToken.toLowerCase() === USDT.toLowerCase() && swapFeeInUsdt(b.usdt, inUsdt.fee)) q = inUsdt;
-    }
-    q ??= await quoteWith(NATIVE_TOKEN);
-    if (q.fundedFromChainId !== undefined && q.fundedFromChainId !== CELO_CHAIN_ID) throw new Error("The relay offered to fund this from another chain. Autumn only converts on Celo; nothing was sent.");
-    const native = q.feeToken.toLowerCase() === NATIVE_TOKEN.toLowerCase();
-    const feeSymbol = native ? "CELO" : "USD₮";
-    const registrationCelo = q.value; // the calls carry no value: anything here is the first-action registration
-    const { keep, max } = swapKeepAndMax(b.celo, { walletRegistered: reg.walletRegistered, perKeyFeeCelo: (reg.feePerKey * REGISTRATION_VALUE_PERCENT) / 100n }, { fee: q.fee, feeSymbol, registrationCelo });
+    const amountIn = probe ? (balance >= 2n * PROBE[from] ? PROBE[from] : balance / 2n || balance) : req.amount!;
+    const pq = await checkedPoolQuote(from, to, amountIn, b.blockNumber);
+    const calls = buildSwapCalls(wallet.address, from, to, amountIn, pq.minOut);
+    // The relay's fee in both tokens: the fee token is chosen per amount (USD₮ when enough is left, else CELO).
+    const quoteWith = (feeToken: Address) =>
+      sdkClient()
+        .quoteExecute({ wallet, signer, calls, feeToken, chainId: CELO_CHAIN_ID, agentIdentity: false })
+        .then((q) => {
+          if (q.fundedFromChainId !== undefined && q.fundedFromChainId !== CELO_CHAIN_ID) throw new Error("funded from another chain");
+          return q.feeToken.toLowerCase() === feeToken.toLowerCase() ? q : null;
+        })
+        .catch(() => null);
+    const [inUsdt, inCelo] = await Promise.all([b.usdt > 0n ? quoteWith(USDT) : Promise.resolve(null), b.celo > 0n ? quoteWith(NATIVE_TOKEN) : Promise.resolve(null)]);
+    if (!inUsdt && !inCelo) throw new Error("The relay could not quote the network fee right now. Nothing was sent. Try again in a minute.");
+    // The calls carry no value: anything in the quote's value is the first-action registration.
+    const registration = (inCelo ?? inUsdt)!.value;
     return {
+      from,
+      to,
       amountIn,
       probe,
       expectedOut: pq.quotedOut,
       minOut: pq.minOut,
       referenceOut: pq.referenceOut,
       belowReferenceBps: pq.belowReferenceBps,
-      fee: q.fee,
-      feeSymbol,
-      registrationCelo,
-      keep,
-      max,
+      viaUsdt: route.hops.length === 2,
+      poolFees: routeFeeText(route),
+      fees: { usdt: inUsdt?.fee ?? null, celo: inCelo?.fee ?? null, registration },
+      plan: { walletRegistered: reg.walletRegistered, perKeyFee: (reg.feePerKey * REGISTRATION_VALUE_PERCENT) / 100n },
       observedAt: new Date(),
     };
   }
@@ -1446,12 +1456,15 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     const { wallet, signer } = admin();
     if (req.amountIn <= 0n || req.minOut <= 0n) throw new Error("Enter an amount above zero.");
     // A fresh quote right before signing: the price rules again, and the pool must still give the minimum shown.
-    const pq = await checkedPoolQuote(req.amountIn);
+    const pq = await checkedPoolQuote(req.from, req.to, req.amountIn);
     if (pq.quotedOut < req.minOut) {
-      throw new Error(`The price moved: the pool now gives about ${usdtText(pq.quotedOut)} USD₮, less than the ${usdtText(req.minOut)} USD₮ minimum you reviewed. Nothing was sent. Review the new quote.`);
+      throw new Error("The price moved: the pool now gives less than the minimum you reviewed. Nothing was sent. Review the new quote.");
     }
     if (req.minOut < lowestAllowedMinOut(pq.referenceOut)) throw new Error("That minimum is lower than the price check allows. Nothing was sent.");
-    const calls = buildSwapCalls(wallet.address, req.amountIn, req.minOut);
+    const b = await readBalances(pub, wallet.address).catch(() => null);
+    if (!b) throw new SwapUnavailableError("unreadable", "Your balances could not be read from Celo right now. Nothing was sent. Try again in a minute.");
+    if (swapBalanceOf(b, req.from) < req.amountIn) throw new Error("The wallet no longer holds that much. Nothing was sent.");
+    const calls = buildSwapCalls(wallet.address, req.from, req.to, req.amountIn, req.minOut);
     decodeSwapCalls(calls, wallet.address); // exactly the two calls, paying this wallet
     let r: Awaited<ReturnType<Client["execute"]>>;
     try {
@@ -1464,7 +1477,7 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
       }
       throw e;
     }
-    if (r.status === "FAILED") throw new Error("The conversion reverted onchain, so nothing was converted. Your CELO is still in your wallet.");
+    if (r.status === "FAILED") throw new Error("The conversion reverted onchain, so nothing was converted. Your funds are still in your wallet.");
     const ref = { ...(r.transactionHash ? { txHash: r.transactionHash as TxHash } : {}), callsId: r.callsId };
     if (r.status !== "CONFIRMED" || !r.transactionHash) throw swapPending(ref, "The relay accepted the conversion but has not confirmed it yet.");
     return confirmSwapped(req, wallet.address, r.transactionHash as TxHash, 120_000);
@@ -1492,12 +1505,12 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
         await sleep(2000);
       }
     }
-    if (receipt.status !== "success") throw new Error("The transaction reverted onchain, so nothing was converted. Your CELO is still in your wallet.");
+    if (receipt.status !== "success") throw new Error("The transaction reverted onchain, so nothing was converted. Your funds are still in your wallet.");
     // The relay's transaction can succeed while the intent inside it fails: the pool's transfers must be in it.
-    const check = checkSwapLogs(receipt.logs, { wallet, amountIn: req.amountIn, minOut: req.minOut });
+    const check = checkSwapLogs(receipt.logs, { wallet, from: req.from, to: req.to, amountIn: req.amountIn, minOut: req.minOut });
     if (!check.ok) throw pending(`Celo shows the transaction, but not the expected conversion in it (${check.reason}). Check it on Celoscan.`);
     const allowanceLeft = await read(() =>
-      pub.readContract({ address: CELO_TOKEN, abi: erc20Abi, functionName: "allowance", args: [wallet, SWAP_ROUTER_02], blockNumber: receipt.blockNumber }),
+      pub.readContract({ address: SWAP_TOKEN[req.from], abi: erc20Abi, functionName: "allowance", args: [wallet, SWAP_ROUTER_02], blockNumber: receipt.blockNumber }),
     );
     let now = await read(() => readBalances(pub, wallet));
     for (let i = 0; i < 10 && now.blockNumber < receipt.blockNumber; i++) {
@@ -1508,7 +1521,7 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     const balances: Balances = { usdt: now.usdt, gold: now.xaut0, celo: now.celo, observedAt: block ? new Date(Number(block.timestamp) * 1000) : new Date() };
     last.balances = balances;
     emit();
-    return { txHash, received: check.usdtOut, allowanceLeft, balances };
+    return { txHash, received: check.amountOut, allowanceLeft, balances };
   }
 
   async function checkSwap(req: SwapRequest, ref: { txHash?: TxHash; callsId?: string }): Promise<SwapResult> {

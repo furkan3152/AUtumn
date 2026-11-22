@@ -40,12 +40,15 @@ Wallets track. Live app: https://autumn-gold.onrender.com
    with your passkey.
 5. "Send out" moves USD₮, XAUt0 or CELO to any Celo address, with your
    passkey, whether the agent runs or not.
-6. "Convert CELO to USD₮" swaps part of the wallet's CELO for USD₮, so a
-   wallet funded only with CELO can start a plan. You sign it with your
-   passkey and Altana's relay sends it: an exact CELO approval and a swap on
-   Uniswap v3's CELO/USD₮ 0.01% pool, with at most 1% slippage. Autumn
-   refuses it when the quote is more than 3% below Celo's reference rate, and
-   Max keeps the CELO the next plan's registration needs.
+6. "Convert" swaps between the wallet's CELO, USD₮ and gold in any
+   direction, so a wallet funded only with CELO can start a plan. You sign it
+   with your passkey and Altana's relay sends it: an exact approval of the
+   asset sold and one swap on Uniswap v3 (CELO/USD₮ 0.01% pool, USD₮/XAUt0
+   0.3% pool, both via USD₮ for CELO ↔ gold), with at most 1% slippage.
+   Autumn refuses it when the quote is more than 3% below the reference price
+   (Celo's CELO rate, the gold pool's 30-minute average), and Max keeps the
+   CELO the next plan's registration needs. Gold bought this way is yours, not
+   an agent purchase, and does not touch the agent's limit.
 
 Grants, revokes, identity registration, "Send out" and conversions are signed with your
 passkey and sent by Altana's relay. The schedule rules, the fee allowance,
@@ -90,11 +93,14 @@ capacity to 1,800 observations
 
 ## Status and known limits
 
-- **Converting CELO.** The conversion is an owner action, not an agent
-  action: the session key cannot do it. Its price checks run in the browser
-  (the pool's quote against Celo's fee-currency rate, then a 1% floor the
-  router enforces); it was tested on a mainnet fork and by read-only calls,
-  not yet with a real passkey swap on mainnet.
+- **Converting.** A conversion is an owner action, not an agent action:
+  the session key cannot do it. Its price checks run in the browser (the
+  pool's quote against the reference price, then a 1% floor the router
+  enforces). CELO → USD₮ has run with real passkeys on mainnet; the other
+  directions were tested on a mainnet fork and by read-only calls only. The
+  gold pool is small: larger gold amounts are refused as moving its price,
+  and gold conversions are unavailable while the pool cannot report a
+  30-minute average.
 - **GoldBuyer is unaudited.** It has no owner and is fork-tested against
   Celo mainnet (`contracts/`).
 - **Relay dependency.** Altana's relay prepares every purchase and sends

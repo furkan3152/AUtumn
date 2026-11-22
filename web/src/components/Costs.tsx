@@ -54,8 +54,8 @@ export function CostsList({ registration, fees, canConvert = false }: { registra
         <li>
           <Icon name="coin" />
           <span>
-            <strong>Only have CELO?</strong> You can send only CELO and convert part of it to USD₮ here. Autumn keeps the CELO a plan needs for the
-            registration.
+            <strong>Only have CELO?</strong> You can send only CELO and convert part of it to USD₮ here with &quot;Convert&quot;. Autumn keeps the CELO a
+            plan needs for the registration.
           </span>
         </li>
       )}

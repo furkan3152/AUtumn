@@ -8,23 +8,38 @@
  *   | fresh-device-bound  no wallet yet; creating one makes a device-bound passkey
  *   | fresh-fallback      no wallet yet; the normal passkey request fails as "cancelled" (the phone only offered
  *                         another device) and "Use this phone's screen lock instead" (mode "device") succeeds
- *   | celo-only           a new wallet that received only CELO (250 CELO, no USD₮): "Convert CELO to USD₮" is offered
+ *   | celo-only           a new wallet that received only CELO (250 CELO, no USD₮): "Convert" is offered
+ * Gold amounts worth over 40 USD₮ move the preview gold pool's price by 5%, so "Convert" refuses them.
  *
  * createWallet({ mode: "device" }) always makes a device-bound passkey, as the live client does.
  *
  * Optional `&passkeyError=<reason>` makes createWallet and restoreWallet fail with that PasskeyError reason:
  *   cancelled | wrong-site | already-exists | interrupted | unsupported
  *
- * Optional `&swap=<case>` changes "Convert CELO to USD₮":
- *   unreadable  the reference rate cannot be read (converting unavailable)
- *   price       the pool quotes 5% below the reference rate (refused)
+ * Optional `&swap=<case>` changes "Convert":
+ *   unreadable  a reference price cannot be read (converting unavailable)
+ *   no-average  the gold pool has no 30-minute average (gold conversions unavailable)
+ *   price       the pools quote 5% below the reference prices (refused)
  *   moved       quotes work, but the price moves before signing (refused at "Convert with passkey")
  *   pending     the conversion is sent but not confirmed yet ("Check again")
  *
  * The preview's backup code is a real, checksummed code (with made-up passkey facts); restoreFromBackupCode
  * accepts it (or any valid code for this page's host) and refuses malformed ones exactly as the live client does.
  */
-import { USDT as USDT_TOKEN, checkDestination, checkSwapAmount, maxSendable, swapPriceCheck, type SendAsset } from "@autumn/core";
+import {
+  USDT as USDT_TOKEN,
+  checkDestination,
+  checkSwapAmount,
+  maxSendable,
+  routeFeeText,
+  swapBalanceOf,
+  swapPriceCheck,
+  swapRoute,
+  usdtToCelo,
+  type SendAsset,
+  type SwapAsset,
+  type SwapFees,
+} from "@autumn/core";
 import {
   DECIMALS,
   ORCHESTRATOR_ENTRY_TEXT,
@@ -46,7 +61,8 @@ import {
   type Wallet,
   CheckAgainError,
   SwapUnavailableError,
-  swapKeepAndMax,
+  SWAP_ASSET_LABEL,
+  swapBalances,
 } from "./autumn";
 import { BackupCodeError, decodeBackupCode, encodeBackupCode } from "./backupCode";
 import { passkeyFailure, type Discoverable, type PasskeyFailureReason } from "./passkey";
@@ -269,49 +285,67 @@ export function createPreviewClient(): AutumnClient {
   const swapCase = params?.get("swap") ?? null;
   let swapFlight: Promise<SwapResult> | null = null;
   let swapMoved = swapCase === "moved";
-  /** The preview pool: 0.01% under the reference rate, or 5% under it with `&swap=price`. */
-  const previewPoolQuote = (amountIn: bigint) => {
-    const ref = (amountIn * PREVIEW_RATE.numerator) / PREVIEW_RATE.denominator / 10n ** 12n;
-    const out = swapCase === "price" ? (ref * 95n) / 100n : (ref * 9_999n) / 10_000n;
-    return { out, check: swapPriceCheck(amountIn, out, PREVIEW_RATE) };
+  /** Base units of `to` an amount is worth at the preview's reference prices (CELO rate, gold price). */
+  const previewValue = (from: SwapAsset, to: SwapAsset, amount: bigint): bigint => {
+    const perOunce = state.price?.usdtPerOunce ?? 4126_400000n;
+    const usdt = from === "USDT" ? amount : from === "CELO" ? (amount * PREVIEW_RATE.numerator) / PREVIEW_RATE.denominator / 10n ** 12n : (amount * perOunce) / OUNCE;
+    return to === "USDT" ? usdt : to === "CELO" ? usdtToCelo(usdt, PREVIEW_RATE) : (usdt * OUNCE) / perOunce;
   };
+  /**
+   * The preview pools: the reference value less the pool fees; gold amounts worth over 40 USD₮ move the price 5%
+   * (price impact); `&swap=price` puts the pools 5% under the reference.
+   */
+  const previewPoolQuote = (from: SwapAsset, to: SwapAsset, amountIn: bigint) => {
+    const ref = previewValue(from, to, amountIn);
+    const route = swapRoute(from, to);
+    const feeKeep = route.hops.reduce((k, h) => (k * (1_000_000n - BigInt(h.fee))) / 1_000_000n, 1_000_000n);
+    const spot = swapCase === "price" ? (ref * 95n) / 100n : ref;
+    const big = (from === "XAUT0" || to === "XAUT0") && previewValue(from, "USDT", amountIn) > 40n * USDT;
+    const out = ((big ? (spot * 95n) / 100n : spot) * feeKeep) / 1_000_000n;
+    return { route, out, check: swapPriceCheck({ quotedOut: out, referenceOut: ref, spotOut: spot, amountIn }) };
+  };
+  const previewFees = (): SwapFees => ({ usdt: PREVIEW_SEND_FEE, celo: PREVIEW_SWAP_FEE_CELO, registration: state.registration?.walletRegistered ? 0n : (state.registration?.perKeyFeeCelo ?? FEE / 2n) });
   const settleSwap = (req: SwapRequest, txHash: TxHash) => {
     const b = state.balances!;
     const reg = state.registration!;
-    const p = previewPoolQuote(req.amountIn);
-    const fee = req.feeSymbol === "CELO" ? PREVIEW_SWAP_FEE_CELO : PREVIEW_SEND_FEE;
-    const registrationCelo = reg.walletRegistered ? 0n : reg.perKeyFeeCelo;
+    const { out } = previewPoolQuote(req.from, req.to, req.amountIn);
+    const fees = previewFees();
+    const d = { CELO: 0n, USDT: 0n, XAUT0: 0n } as Record<SwapAsset, bigint>;
+    d[req.from] -= req.amountIn;
+    d[req.to] += out;
+    if (req.feeSymbol === "CELO") d.CELO -= fees.celo!;
+    else d.USDT -= fees.usdt!;
+    d.CELO -= fees.registration;
     const at = new Date();
-    const balances = {
-      ...b,
-      celo: b.celo - req.amountIn - registrationCelo - (req.feeSymbol === "CELO" ? fee : 0n),
-      usdt: b.usdt + p.out - (req.feeSymbol === "USD₮" ? fee : 0n),
-      observedAt: at,
-    };
+    const balances = { ...b, celo: b.celo + d.CELO, usdt: b.usdt + d.USDT, gold: b.gold + d.XAUT0, observedAt: at };
     state = {
       ...state,
       balances,
       registration: reg.walletRegistered ? reg : { walletRegistered: true, nextGrantFeeCelo: reg.perKeyFeeCelo, perKeyFeeCelo: reg.perKeyFeeCelo },
     };
     emit();
-    return { txHash, received: p.out, allowanceLeft: 0n, balances };
+    return { txHash, received: out, allowanceLeft: 0n, balances };
+  };
+  const unavailableFor = (from: SwapAsset, to: SwapAsset): SwapUnavailableError | null => {
+    if (swapCase === "unreadable") return new SwapUnavailableError("unreadable", "A reference price or the pool's quote could not be read right now, so converting is unavailable. Nothing was sent. Try again in a minute.");
+    if (swapCase === "no-average" && (from === "XAUT0" || to === "XAUT0")) {
+      return new SwapUnavailableError("no-average", "Converting gold is unavailable: the gold pool has less than 30 minutes of price history, so its price cannot be checked right now. Nothing was sent. Try again later.");
+    }
+    return null;
   };
   async function doSwap(req: SwapRequest) {
     await wait(400);
+    const unavailable = unavailableFor(req.from, req.to);
+    if (unavailable) throw unavailable;
     const b = state.balances!;
-    const p = previewPoolQuote(req.amountIn);
-    if (!p.check.ok) throw new SwapUnavailableError("price", `Converting is unavailable right now: ${p.check.reason}. Nothing was sent.`);
+    const p = previewPoolQuote(req.from, req.to, req.amountIn);
+    if (!p.check.ok) throw new SwapUnavailableError("price", `${p.check.reason[0]!.toUpperCase()}${p.check.reason.slice(1)}. Nothing was sent.`);
     if (swapMoved) {
       swapMoved = false; // once: reviewing again works
       throw new Error("The price moved: the pool now gives less than the minimum you reviewed. Nothing was sent. Review the new quote.");
     }
     const reg = state.registration!;
-    const keep = swapKeepAndMax(b.celo, reg, {
-      fee: req.feeSymbol === "CELO" ? PREVIEW_SWAP_FEE_CELO : PREVIEW_SEND_FEE,
-      feeSymbol: req.feeSymbol,
-      registrationCelo: reg.walletRegistered ? 0n : reg.perKeyFeeCelo,
-    }).keep;
-    const ok = checkSwapAmount(req.amountIn, b.celo, keep);
+    const ok = checkSwapAmount(req.from, req.amountIn, swapBalances(b), previewFees(), { walletRegistered: reg.walletRegistered, perKeyFee: reg.perKeyFeeCelo });
     if (!ok.ok) throw new Error(ok.problem);
     if (p.out < req.minOut) throw new Error("The price moved: the pool now gives less than the minimum you reviewed. Nothing was sent. Review the new quote.");
     await wait(2200);
@@ -479,34 +513,33 @@ export function createPreviewClient(): AutumnClient {
       emit();
       return { txHash: fakeHash(), balances };
     },
-    async quoteSwap(req: { amount?: bigint }): Promise<SwapQuote> {
+    async quoteSwap(req: { from: SwapAsset; to: SwapAsset; amount?: bigint }): Promise<SwapQuote> {
       await wait(500);
-      if (swapCase === "unreadable") {
-        throw new SwapUnavailableError("unreadable", "Celo's reference rate or the pool's quote could not be read right now, so converting is unavailable. Nothing was sent. Try again in a minute.");
-      }
+      const { from, to } = req;
+      const unavailable = unavailableFor(from, to);
+      if (unavailable) throw unavailable;
       const b = state.balances!;
       const reg = state.registration!;
-      if (b.celo === 0n) throw new Error("The wallet holds no CELO to convert.");
+      const balance = swapBalanceOf(swapBalances(b), from);
+      if (balance === 0n) throw new Error(`The wallet holds no ${from === "XAUT0" ? "gold" : SWAP_ASSET_LABEL[from]} to convert.`);
+      const probeAmount: Record<SwapAsset, bigint> = { CELO: 10n * CELO, USDT: USDT, XAUT0: 1_000n };
       const probe = !(req.amount && req.amount > 0n);
-      const amountIn = probe ? (b.celo >= 2n * CELO ? CELO : b.celo / 2n) : req.amount!;
-      const p = previewPoolQuote(amountIn);
-      if (!p.check.ok) throw new SwapUnavailableError("price", `Converting is unavailable right now: ${p.check.reason}. Nothing was sent.`);
-      const feeSymbol = b.usdt >= (PREVIEW_SEND_FEE * 3n) / 2n ? ("USD₮" as const) : ("CELO" as const);
-      const fee = feeSymbol === "CELO" ? PREVIEW_SWAP_FEE_CELO : PREVIEW_SEND_FEE;
-      const registrationCelo = reg.walletRegistered ? 0n : reg.perKeyFeeCelo;
-      const { keep, max } = swapKeepAndMax(b.celo, reg, { fee, feeSymbol, registrationCelo });
+      const amountIn = probe ? (balance >= 2n * probeAmount[from] ? probeAmount[from] : balance / 2n || balance) : req.amount!;
+      const p = previewPoolQuote(from, to, amountIn);
+      if (!p.check.ok) throw new SwapUnavailableError("price", `${p.check.reason[0]!.toUpperCase()}${p.check.reason.slice(1)}. Nothing was sent.`);
       return {
+        from,
+        to,
         amountIn,
         probe,
         expectedOut: p.out,
         minOut: p.check.minOut,
         referenceOut: p.check.referenceOut,
         belowReferenceBps: p.check.belowReferenceBps,
-        fee,
-        feeSymbol,
-        registrationCelo,
-        keep,
-        max,
+        viaUsdt: p.route.hops.length === 2,
+        poolFees: routeFeeText(p.route),
+        fees: previewFees(),
+        plan: { walletRegistered: reg.walletRegistered, perKeyFee: reg.perKeyFeeCelo },
         observedAt: new Date(),
       };
     },

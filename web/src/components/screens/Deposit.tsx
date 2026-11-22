@@ -23,7 +23,7 @@ export function Deposit({
   onContinue?: () => void;
   onBack?: () => void;
   onSendOut?: () => void;
-  /** Convert some CELO to USD₮: offered when the wallet holds CELO beyond what the next plan's registration needs. */
+  /** Convert (CELO → USD₮ preselected): offered when the wallet holds CELO beyond what the next plan's registration needs. */
   onConvert?: () => void;
   onBackupCode?: () => void;
 }) {
@@ -135,7 +135,7 @@ export function Deposit({
 
       {onConvert && hasSpareCelo(state) ? (
         <Button variant={funded ? "plain" : "primary"} block onClick={onConvert}>
-          Convert CELO to USD₮
+          Convert
         </Button>
       ) : null}
 
