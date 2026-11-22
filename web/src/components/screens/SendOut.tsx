@@ -274,7 +274,11 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
               </Button>
             </div>
           )}
-          <FailureNotice error={error} onRetry={confirm} prefix="Not sent: " />
+          <FailureNotice
+            error={error}
+            onRetry={(error as { name?: string } | null)?.name === "SendSubmittedError" ? undefined : confirm}
+            prefix={(error as { name?: string } | null)?.name === "SendSubmittedError" ? "" : "Not sent: "}
+          />
         </Panel>
       )}
 

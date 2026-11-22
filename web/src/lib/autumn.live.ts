@@ -184,6 +184,17 @@ async function api<T>(path: string, init?: { method?: string; body?: unknown }):
 const celoToUsdtUnit = (rate: { numerator: bigint; denominator: bigint }) => (10n ** 18n * rate.numerator) / rate.denominator / 10n ** 12n;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** The transfer's transaction is onchain, but the balance check afterwards could not be read. */
+export class SendSubmittedError extends Error {
+  readonly txHash: string;
+  constructor(txHash: string, cause?: unknown) {
+    super(`The transfer was sent (${txHash}), but Celo's public node did not answer the balance check. Do not send again: view the transaction on Celoscan, then reload.`);
+    this.name = "SendSubmittedError";
+    this.txHash = txHash;
+    this.cause = cause;
+  }
+}
 const errText = (e: unknown) => (e instanceof Error && e.message ? e.message : String(e));
 
 export function createLiveClient(cfg: PublicConfig): AutumnClient {
@@ -867,18 +878,34 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     const txHash = r.transactionHash as TxHash;
     const receipt = await pub.waitForTransactionReceipt({ hash: txHash, timeout: 120_000 });
     if (receipt.status !== "success") throw new Error("The transaction reverted onchain, so nothing was sent.");
+    // From here the transaction is onchain. A read that fails must never be reported as "not sent": the public
+    // node often cannot serve the newest block yet ("block is out of range"), so retry, then say what is known.
+    const read = async <T,>(fn: () => Promise<T>): Promise<T> => {
+      let lastError: unknown;
+      for (let i = 0; i < 12; i++) {
+        try {
+          return await fn();
+        } catch (e) {
+          lastError = e;
+          await sleep(1500);
+        }
+      }
+      throw new SendSubmittedError(txHash, lastError);
+    };
     // The relay's transaction can succeed while the intent inside it fails: check the balance actually moved.
-    const [before, after] = await Promise.all([
-      readBalances(pub, wallet.address, receipt.blockNumber - 1n),
-      readBalances(pub, wallet.address, receipt.blockNumber),
-    ]);
+    const [before, after] = await read(() =>
+      Promise.all([
+        readBalances(pub, wallet.address, receipt.blockNumber - 1n),
+        readBalances(pub, wallet.address, receipt.blockNumber),
+      ]),
+    );
     if (balanceOf(before, req.asset) - balanceOf(after, req.asset) < req.amount) {
       throw new Error(`Celo shows the transaction (${txHash}) but not the transfer. Nothing may have been sent; check it on Celoscan.`);
     }
-    let now = await readBalances(pub, wallet.address);
+    let now = await read(() => readBalances(pub, wallet.address));
     for (let i = 0; i < 10 && now.blockNumber < receipt.blockNumber; i++) {
       await sleep(1500);
-      now = await readBalances(pub, wallet.address);
+      now = await read(() => readBalances(pub, wallet.address));
     }
     const block = await pub.getBlock({ blockNumber: now.blockNumber }).catch(() => null);
     const balances: Balances = { usdt: now.usdt, gold: now.xaut0, celo: now.celo, observedAt: block ? new Date(Number(block.timestamp) * 1000) : new Date() };

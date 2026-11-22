@@ -59,6 +59,13 @@ export function useAutumn(): AutumnLoad & { isPreview: boolean } {
 }
 
 export function errorText(e: unknown): string {
-  if (e instanceof Error && e.message) return e.message;
-  return "Something went wrong.";
+  if (!(e instanceof Error) || !e.message) return "Something went wrong.";
+  // viem errors carry the whole request in `message`; `shortMessage` and `details` are the readable part.
+  const v = e as Error & { shortMessage?: string; details?: string };
+  if (typeof v.shortMessage === "string" && v.shortMessage) {
+    if (/block is out of range/i.test(v.details ?? v.message)) return "Celo's public node did not answer in time. Wait a few seconds and try again.";
+    return v.details && v.details !== v.shortMessage ? `${v.shortMessage} ${v.details}` : v.shortMessage;
+  }
+  if (/asset deficits/i.test(e.message)) return "The wallet does not hold enough for this amount plus the fee. Lower the amount (Max leaves room for the fee) and try again.";
+  return e.message;
 }
