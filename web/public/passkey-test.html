@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Autumn passkey check</title>
+<style>
+  body { font: 16px/1.4 system-ui, sans-serif; margin: 16px; background: #23150d; color: #f6e6c0; }
+  button { display: block; width: 100%; margin: 8px 0; padding: 14px; font: inherit; border: 2px solid #9a5a2c; background: #f6e6c0; color: #23150d; border-radius: 4px; }
+  pre { white-space: pre-wrap; word-break: break-word; background: #120a06; padding: 10px; border-radius: 4px; font-size: 13px; }
+  .ok { color: #9be07a; } .bad { color: #ff9c8a; }
+</style>
+<h1>Passkey check</h1>
+<p>This page only tests whether this browser can create a passkey for this site. It sends nothing anywhere. Tap each button once, wait for the result, then take a screenshot of the whole page.</p>
+<div id="buttons"></div>
+<h2>Results</h2>
+<pre id="out">No test run yet.</pre>
+<h2>Browser</h2>
+<pre id="env"></pre>
+<script>
+const out = document.getElementById("out"), env = document.getElementById("env");
+const lines = [];
+function log(s, cls) { lines.push(s); out.textContent = lines.join("\n"); }
+const rand = (n) => crypto.getRandomValues(new Uint8Array(n));
+const base = (extra) => ({
+  publicKey: Object.assign({
+    challenge: rand(32),
+    rp: { id: location.hostname, name: "Autumn" },
+    user: { id: rand(20), name: "Autumn test", displayName: "Autumn test" },
+    pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+    attestation: "none",
+  }, extra),
+});
+const tests = [
+  ["1. Plain request (browser defaults)", () => base({})],
+  ["2. This phone's screen lock (platform, not saved to an account)", () => base({ authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "discouraged", requireResidentKey: false, userVerification: "required" } })],
+  ["3. Same as 2, verification preferred", () => base({ authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "discouraged", requireResidentKey: false, userVerification: "preferred" } })],
+  ["4. Same as 2, with the credProps extension", () => base({ authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "discouraged", requireResidentKey: false, userVerification: "required" }, extensions: { credProps: true } })],
+  ["5. Saved passkey preferred", () => base({ authenticatorSelection: { residentKey: "preferred", requireResidentKey: false, userVerification: "required" }, extensions: { credProps: true } })],
+  ["6. Saved passkey required (platform)", () => base({ authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "required", requireResidentKey: true, userVerification: "required" } })],
+  ["7. Same as 2, also accepting RS256", () => { const o = base({ authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "discouraged", requireResidentKey: false, userVerification: "required" } }); o.publicKey.pubKeyCredParams.push({ type: "public-key", alg: -257 }); return o; }],
+];
+const box = document.getElementById("buttons");
+tests.forEach(([name, make]) => {
+  const b = document.createElement("button");
+  b.textContent = name;
+  b.onclick = async () => {
+    const t0 = Date.now();
+    try {
+      const c = await navigator.credentials.create(make());
+      const ext = c.getClientExtensionResults ? c.getClientExtensionResults() : {};
+      const tr = c.response.getTransports ? c.response.getTransports() : [];
+      log("OK   " + name + " | attachment=" + c.authenticatorAttachment + " transports=" + tr.join(",") + " rk=" + JSON.stringify(ext.credProps || null) + " (" + (Date.now() - t0) + " ms)");
+    } catch (e) {
+      log("FAIL " + name + " | " + e.name + ": " + e.message + " (" + (Date.now() - t0) + " ms)");
+    }
+  };
+  box.appendChild(b);
+});
+(async () => {
+  const info = { userAgent: navigator.userAgent, host: location.hostname, secure: isSecureContext, hasPKC: typeof PublicKeyCredential !== "undefined" };
+  try { info.uvpaa = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); } catch (e) { info.uvpaa = "error " + e.name; }
+  try { info.conditional = await PublicKeyCredential.isConditionalMediationAvailable(); } catch (e) { info.conditional = "n/a"; }
+  try { info.capabilities = await PublicKeyCredential.getClientCapabilities(); } catch (e) { info.capabilities = "n/a"; }
+  env.textContent = JSON.stringify(info, null, 2);
+})();
+</script>
+</html>
