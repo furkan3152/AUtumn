@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { SEND_ASSET_INFO, checkDestination, parseAmountText } from "@autumn/core";
 import { CheckAgainError, sendMax, type Address, type AutumnClient, type AutumnState, type SendAsset, type SendQuote, type SendResult } from "@/lib/autumn";
 import { celo, formatDateTime, formatGrams, formatUnits, shortAddress, usdt, usdtFine } from "@/lib/format";
@@ -32,6 +32,8 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
   const [asset, setAsset] = useState<SendAsset>("USDT");
   const [to, setTo] = useState("");
   const [amountText, setAmountText] = useState("");
+  // True while the amount is what Max filled in: Review may then lower it to the newest maximum instead of refusing.
+  const usedMax = useRef(false);
   const [step, setStep] = useState<Step>({ kind: "form" });
   const [quote, setQuote] = useState<SendQuote | null>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
@@ -81,9 +83,13 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
       setQuote(q);
       setQuoteError(null);
       setAmountText(exact(sendMax(asset, balance, q), asset));
+      usedMax.current = true;
     } catch (e) {
       setQuoteError(errorText(e));
-      if (max !== null) setAmountText(exact(max, asset));
+      if (max !== null) {
+        setAmountText(exact(max, asset));
+        usedMax.current = true;
+      }
     } finally {
       setBusy(false);
     }
@@ -98,8 +104,15 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
       const q = await client.quoteSend({ asset, to: dest.address, amount });
       setQuote(q); // Max and the fee line follow the newest quote
       const most = sendMax(asset, balance, q);
-      if (amount > most) throw new Error(`That leaves too little for the fee. The most you can send is ${shown(most, asset)}.`);
-      setStep({ kind: "review", to: dest.address, amount, quote: q });
+      let sending = amount;
+      if (amount > most) {
+        // The fee is quoted again here and can come back a little higher than when Max was pressed. Max means
+        // "the most possible", so follow the newest maximum; an amount the owner typed is never changed.
+        if (!usedMax.current || most <= 0n) throw new Error(`That leaves too little for the fee. The most you can send is ${shown(most, asset)}.`);
+        sending = most;
+        setAmountText(exact(most, asset));
+      }
+      setStep({ kind: "review", to: dest.address, amount: sending, quote: q });
     } catch (e) {
       setError(e);
     } finally {
@@ -163,6 +176,7 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
                       checked={asset === a.id}
                       onChange={() => {
                         setAsset(a.id);
+                        usedMax.current = false;
                         setAmountText("");
                         setTouched((t) => ({ ...t, amount: false }));
                       }}
@@ -219,7 +233,10 @@ export function SendOut({ client, state, onBack, goldBuyer }: { client: AutumnCl
                   autoComplete="off"
                   placeholder="0.00"
                   value={amountText}
-                  onChange={(e) => setAmountText(e.target.value)}
+                  onChange={(e) => {
+                    usedMax.current = false;
+                    setAmountText(e.target.value);
+                  }}
                   onBlur={() => setTouched((t) => ({ ...t, amount: true }))}
                   aria-invalid={touched.amount && amountProblem !== null}
                 />
