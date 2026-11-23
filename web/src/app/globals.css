@@ -1098,6 +1098,79 @@ body:has(.landing) .main {
   }
 }
 
+/*
+ * Wide screens: the hero is a framed picture, not a full-bleed banner. The whole 240 x 120 scene shows at a
+ * whole-number pixel scale (2x to 4x: the largest that fits the width and about 45% of the viewport height),
+ * inside the Home scene's wooden frame. The sign hangs over the frame's top edge, in the sky, and the intro
+ * card below takes the frame's width, so the column shares one centred axis.
+ */
+@media (min-width: 1024px) {
+  .landing {
+    --hero-px: 720px;
+    --hero-frame: calc(var(--hero-px) + 30px);
+    --sign-drop: 86px;
+    gap: 32px;
+  }
+  /* The rows below share the widest frame's width (the 4x scene: 960 + 30), at every desktop size. */
+  .landing > :not(.hero) {
+    max-width: 990px;
+  }
+  .hero {
+    padding-top: var(--sign-drop);
+  }
+  .hero .scene {
+    width: var(--hero-frame);
+    height: auto;
+    margin: 0 auto;
+    overflow: visible;
+    border: 15px solid transparent;
+    border-image: var(--img-frame-wood) 4 / 15px / 0 stretch;
+    box-shadow: none;
+    filter: drop-shadow(0 8px 0 rgba(0, 0, 0, 0.4));
+  }
+  .hero .scene__svg {
+    width: var(--hero-px);
+    height: calc(var(--hero-px) / 2);
+    image-rendering: pixelated;
+  }
+  /* Ropes from the top of the page; the board's middle on the frame's top edge. */
+  .hero .hangsign {
+    top: calc(-1 * var(--sign-drop) - 15px);
+  }
+  .hangsign__logo--big {
+    display: none;
+  }
+  .hangsign__logo--small {
+    display: block;
+  }
+  .landing > .landing__intro {
+    max-width: max(var(--hero-frame), 750px) !important;
+    margin-top: 0;
+  }
+}
+
+/* Browsers with CSS round() pick the scale from the viewport; others keep the 3x scene above. */
+@supports (width: round(down, 100vw, 240px)) {
+  @media (min-width: 1024px) {
+    .landing {
+      --hero-px: round(down, clamp(480px, min(100vw - 94px, 90vh), 960px), 240px);
+    }
+  }
+}
+
+/* Tall wide screens get the 4x scene and the big sign. */
+@media (min-width: 1100px) and (min-height: 1067px) {
+  .landing {
+    --sign-drop: 104px;
+  }
+  .hangsign__logo--big {
+    display: block;
+  }
+  .hangsign__logo--small {
+    display: none;
+  }
+}
+
 .restore {
   display: grid;
   gap: 10px;
@@ -1770,6 +1843,18 @@ body:has(.landing) .main {
   }
   .home__col--a { grid-column: 1 / span 5; }
   .home__col--b { grid-column: 6 / span 7; }
+}
+
+/* The Home scene at a whole-number pixel scale (3x: 720 + the 15px frame), centred in its eight columns. */
+@media (min-width: 1200px) {
+  .home__scene .scene--window {
+    width: 750px;
+    max-width: 100%;
+    margin: 0 auto;
+  }
+  .home__scene .scene__svg {
+    image-rendering: pixelated;
+  }
 }
 
 .scene-key {
