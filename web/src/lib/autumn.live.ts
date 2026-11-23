@@ -27,6 +27,8 @@ import { BaseError, ContractFunctionRevertedError, ContractFunctionZeroDataError
 import {
   XAUT0,
   USDT,
+  planAmountProblem,
+  planAmountToUsdt,
   buildSendCall,
   buildSwapCalls,
   checkDestination,
@@ -76,7 +78,6 @@ import { agentStatusFor, buildActivity, currentPlan, mergePurchases, nextPurchas
 import { ApiError, activateVerdict, backoffDelays, checkGrantOnchain } from "./pending";
 import {
   CheckAgainError,
-  DECIMALS,
   ORCHESTRATOR_ENTRY_TEXT,
   type Address,
   type AutumnClient,
@@ -902,8 +903,8 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     assertPasskeyOrigin();
     if (goldBuyerHasCode === false) throw new Error("GoldBuyer is not deployed at the configured address, so no plan can start.");
     const { wallet } = admin();
-    const unit = 10n ** BigInt(DECIMALS.USDT);
-    if (input.amount % unit !== 0n) throw new Error("Plans are whole USD₮ amounts.");
+    const amountProblem = planAmountProblem(input.amount);
+    if (amountProblem) throw new Error(`${amountProblem} Nothing was signed.`);
     const expiresAt = Math.floor(input.expiresAt.getTime() / 1000);
 
     // 0. A grant this browser already sent is settled first: a key the chain shows granted is started, never granted
@@ -918,7 +919,7 @@ export function createLiveClient(cfg: PublicConfig): AutumnClient {
     try {
       created = await api<CreatePlanResponse>("/api/plans", {
         method: "POST",
-        body: { wallet: wallet.address, amountUsdt: Number(input.amount / unit), period: input.period, dipBuy: input.buyTheDip, expiresAt, replacePending: true },
+        body: { wallet: wallet.address, amountUsdt: planAmountToUsdt(input.amount), period: input.period, dipBuy: input.buyTheDip, expiresAt, replacePending: true },
       });
     } catch (e) {
       // A key for a waiting plan is granted onchain already (another tab or device): start that plan instead.

@@ -78,10 +78,39 @@ describe("createPlanRequest", () => {
     expect(r).toMatchObject({ period: "day", periodCap: "2100000", buysPerPeriod: 2 });
   });
 
-  it("refuses amounts, periods and expiries the app does not offer", async () => {
+  it("takes any amount from 1 to 100 USD₮ in steps of 0.01, converted to base units exactly", async () => {
+    const cases: [number, bigint, bigint][] = [
+      // amountUsdt, amountPerBuy, weekly cap without the dip rule
+      [1, 1_000_000n, 1_050_000n],
+      [4, 4_000_000n, 4_050_000n],
+      [4.5, 4_500_000n, 4_550_000n],
+      [7, 7_000_000n, 7_050_000n],
+      [33.33, 33_330_000n, 33_380_000n],
+      [100, 100_000_000n, 100_050_000n],
+    ];
+    for (const [amountUsdt, amountPerBuy, cap] of cases) {
+      const { deps, storage } = setup();
+      // The body as it arrives: JSON text, parsed (4.5 is the double closest to 4.5).
+      const r = await createPlanRequest(deps, JSON.parse(JSON.stringify(body({ amountUsdt }))));
+      expect(r.periodCap).toBe(cap.toString());
+      expect(r.expected.permissions.spend![0]!.limit).toBe(cap.toString());
+      expect((await storage.getPlan(r.planId))!.amountPerBuy).toBe(amountPerBuy);
+    }
     const { deps } = setup();
-    await rejects(createPlanRequest(deps, body({ amountUsdt: 7 })), 400, /one of 1, 5, 10/);
-    await rejects(createPlanRequest(deps, body({ amountUsdt: "5" })), 400);
+    const dip = await createPlanRequest(deps, body({ amountUsdt: 4.5, period: "day", dipBuy: true }));
+    expect(dip).toMatchObject({ period: "day", periodCap: "9100000", buysPerPeriod: 2 });
+  });
+
+  it("refuses amounts outside 1 to 100 USD₮, with more than 2 decimals, or not a JSON number, with a 400", async () => {
+    const { deps, storage } = setup();
+    for (const amountUsdt of [0.99, 100.01, 4.555, 1.1 * 3, 0, -5, -0, 1e-7, 1e21, NaN, Infinity, "5", "4.5", null, true, [5], { v: 5 }, undefined]) {
+      await rejects(createPlanRequest(deps, body({ amountUsdt })), 400, /amountUsdt must be a number of USD₮ from 1 to 100, with at most 2 decimals/);
+    }
+    expect(await storage.listPlansForWallet(WALLET)).toEqual([]);
+  });
+
+  it("refuses periods and expiries the app does not offer", async () => {
+    const { deps } = setup();
     await rejects(createPlanRequest(deps, body({ period: "month" })), 400, /period/);
     await rejects(createPlanRequest(deps, body({ expiresAt: NOW + 365 * 86_400 })), 400, /12 weeks/);
     await rejects(createPlanRequest(deps, body({ wallet: "0x1234" })), 400, /wallet/);
@@ -174,6 +203,22 @@ describe("activatePlanRequest", () => {
     grantOnchain(chain, created);
     const wider = { ...created.expected, permissions: { ...created.expected.permissions, spend: [{ ...created.expected.permissions.spend![0]!, limit: "99000000" }] } };
     await rejects(activatePlanRequest(deps, created.planId, { session: wider, grantTxHash: GRANT_TX }), 409, /does not match/);
+  });
+
+  it("activates a custom amount only when the onchain cap is that amount plus the fee allowance", async () => {
+    const { deps, chain } = setup();
+    const created = await createPlanRequest(deps, body({ amountUsdt: 4.5 }));
+    grantOnchain(chain, created);
+    for (const wrong of [5_050_000n, 4_050_000n, 4_549_999n, 4_550_001n]) {
+      chain.cap = wrong;
+      await rejects(activatePlanRequest(deps, created.planId, { session: created.expected, grantTxHash: GRANT_TX }), 409, /weekly cap/);
+    }
+    chain.cap = 4_550_000n;
+    expect(await activatePlanRequest(deps, created.planId, { session: created.expected, grantTxHash: GRANT_TX })).toMatchObject({
+      status: "active",
+      amountPerBuy: "4500000",
+      periodCap: "4550000",
+    });
   });
 
   it("refuses when the onchain cap, period or expiry differs from the plan", async () => {

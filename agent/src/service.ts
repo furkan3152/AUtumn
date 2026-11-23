@@ -28,6 +28,7 @@ import { getAddress, isAddress, isHex, type Address, type Hex } from "viem";
 import type { SerializedSession } from "@altananetwork/sdk";
 import {
   isPlanPeriod,
+  planAmountFromUsdt,
   PLAN_DURATION_SECS,
   utcDayOfWeek,
   utcHour,
@@ -109,12 +110,8 @@ export function createRateLimiter(opts: { limit: number; windowMs: number; clock
   };
 }
 
-/** The plan amounts the app offers, in whole USD₮. */
-export const PLAN_AMOUNTS_USDT = [1, 5, 10] as const;
 /** How far the expiry the browser showed may be from now + 12 weeks (browser and chain clocks differ). */
 export const EXPIRY_TOLERANCE_SECS = 15 * 60;
-
-const USDT_UNIT = 1_000_000n;
 
 function obj(body: unknown): Record<string, unknown> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) throw new HttpError(400, "the request body must be a JSON object");
@@ -149,8 +146,10 @@ export type CreatePlanResponse = {
 };
 
 /**
- * POST /api/plans. Body: { wallet, amountUsdt: 1|5|10, period: "week"|"day",
- * dipBuy: boolean, expiresAt: unix seconds the browser showed }.
+ * POST /api/plans. Body: { wallet, amountUsdt: a JSON number from 1 to 100 with at
+ * most 2 decimals (4.5 is 4.50 USD₮), period: "week"|"day", dipBuy: boolean,
+ * expiresAt: unix seconds the browser showed }. The amount becomes USD₮ base
+ * units with decimal-string maths (planAmountFromUsdt), never `amount * 1e6`.
  */
 export async function createPlanRequest(deps: ServiceDeps, body: unknown, client?: { ip?: string | null }): Promise<CreatePlanResponse> {
   if (deps.createLimiter && !deps.createLimiter.take(client?.ip || "unknown")) {
@@ -158,10 +157,8 @@ export async function createPlanRequest(deps: ServiceDeps, body: unknown, client
   }
   const b = obj(body);
   const wallet = walletOf(b.wallet);
-  const amount = b.amountUsdt;
-  if (typeof amount !== "number" || !(PLAN_AMOUNTS_USDT as readonly number[]).includes(amount)) {
-    throw new HttpError(400, `amountUsdt must be one of ${PLAN_AMOUNTS_USDT.join(", ")}`);
-  }
+  const amount = planAmountFromUsdt(b.amountUsdt);
+  if (!amount.ok) throw new HttpError(400, amount.problem);
   const period = b.period ?? "week";
   if (!isPlanPeriod(period)) throw new HttpError(400, 'period must be "week" or "day"');
   if (b.dipBuy !== undefined && typeof b.dipBuy !== "boolean") throw new HttpError(400, "dipBuy must be a boolean");
@@ -174,7 +171,7 @@ export async function createPlanRequest(deps: ServiceDeps, body: unknown, client
     throw new HttpError(400, "expiresAt must be 12 weeks from now; reload the plan screen and try again");
   }
   await deps.storage.deletePendingPlansBefore(wallet, now - PENDING_PLAN_RETENTION_SECS);
-  const amountPerBuy = BigInt(amount) * USDT_UNIT;
+  const amountPerBuy = amount.value;
   const dipBuy = b.dipBuy === true;
 
   // A wallet has at most one young plan waiting for its grant. A retry with the same choices gets the same plan and

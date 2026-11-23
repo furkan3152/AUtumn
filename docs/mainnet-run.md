@@ -56,7 +56,7 @@ node scripts/e2e-mainnet.mjs --dry-run
 
 # the run; every step not yet passed, in order
 E2E_ADMIN_KEY=0x…  E2E_CRON_SECRET=…  E2E_RETURN_TO=0x…  node scripts/e2e-mainnet.mjs
-# optional: E2E_BASE_URL (default https://autumn-gold.onrender.com), E2E_AMOUNT=1|5|10 (default 1),
+# optional: E2E_BASE_URL (default https://autumn-gold.onrender.com), E2E_AMOUNT=1 to 100 with at most 2 decimals, e.g. 4.5 (default 1),
 # E2E_PERIOD=day|week (default day), E2E_RPC_URL, E2E_TICK_WAIT_MINS (retry a skipped tick)
 
 # one step

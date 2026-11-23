@@ -20,6 +20,7 @@ import {
   type SwapFees,
   PLAN_DURATION_SECS,
   PLAN_DURATION_WEEKS,
+  PLAN_PRESETS_USDT,
   nextPeriodStart,
   type PlanPeriod,
   type SendAsset,
@@ -31,7 +32,7 @@ export { PasskeyError, isAndroid, type PasskeyFailureReason, type PasskeyStep, t
 export { BackupCodeError, WrongDoorError, BACKUP_CODE_PREFIX } from "./backupCode";
 
 export type { PlanPeriod, SendAsset, SwapAsset, SwapFees };
-export { PLAN_DURATION_WEEKS };
+export { PLAN_DURATION_WEEKS, PLAN_PRESETS_USDT };
 
 export type Address = `0x${string}`;
 export type TxHash = `0x${string}`;
@@ -488,7 +489,6 @@ export function usdtForNextPurchase(state: Pick<AutumnState, "plan" | "agent">):
 
 /* ---------- Plan rules shared by every implementation ---------- */
 
-export const PLAN_PRESETS_USDT = [1, 5, 10] as const;
 export const DIP_PERCENT = 2;
 /** The dip rule, worded exactly as the agent applies it. */
 export const DIP_RULE_TEXT = "one extra buy if the price is at least 2% below this period's purchase price";

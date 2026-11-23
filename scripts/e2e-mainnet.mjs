@@ -14,7 +14,7 @@
  *   E2E_CRON_SECRET   the server's CRON_SECRET (for /api/cron/tick and /api/admin/probe)
  *   E2E_RETURN_TO     where "send-out" returns the remaining USD₮, XAUt0 and CELO
  *   E2E_BASE_URL      default https://autumn-gold.onrender.com
- *   E2E_AMOUNT        1, 5 or 10 USD₮ per purchase (default 1)
+ *   E2E_AMOUNT        USD₮ per purchase, 1 to 100 with at most 2 decimals, e.g. 4.5 (default 1)
  *   E2E_PERIOD        day or week (default day)
  *   E2E_RPC_URL       Celo RPC for reads (default forno)
  *   E2E_TICK_WAIT_MINS  if the first tick is skipped (pool price check unavailable, fee too high),
@@ -76,7 +76,8 @@ const env = process.env;
 const ADMIN_KEY = env.E2E_ADMIN_KEY?.trim() || undefined;
 const CRON_SECRET = env.E2E_CRON_SECRET?.trim() || undefined;
 const BASE_URL = (env.E2E_BASE_URL?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, "");
-const AMOUNT_USDT = Number(env.E2E_AMOUNT ?? "1");
+/** The plan amount in USD₮ base units, parsed as a decimal string (never a float times 1e6). */
+const AMOUNT_PARSE = core.parsePlanAmountText(env.E2E_AMOUNT ?? "1");
 const PERIOD = env.E2E_PERIOD ?? "day";
 const RETURN_TO = env.E2E_RETURN_TO?.trim() || undefined;
 const RPC_URL = env.E2E_RPC_URL?.trim() || core.DEFAULT_CELO_RPC_URL;
@@ -89,7 +90,7 @@ const say = (...a) => console.log(redact(a.join(" ")));
 const warn = (...a) => console.error(redact(a.join(" ")));
 
 const problems = [];
-if (![1, 5, 10].includes(AMOUNT_USDT)) problems.push("E2E_AMOUNT must be 1, 5 or 10");
+if (!AMOUNT_PARSE.ok) problems.push(`E2E_AMOUNT must be 1 to 100 USD₮ with at most 2 decimals: ${AMOUNT_PARSE.problem}`);
 if (!core.isPlanPeriod(PERIOD)) problems.push('E2E_PERIOD must be "day" or "week"');
 if (ADMIN_KEY && !/^0x[0-9a-fA-F]{64}$/.test(ADMIN_KEY)) problems.push("E2E_ADMIN_KEY must be 0x followed by 64 hex characters");
 if (problems.length) {
@@ -102,7 +103,9 @@ const XAUT0 = getAddress(core.XAUT0);
 const NATIVE = sdk.NATIVE_TOKEN;
 const CHAIN_ID = 42220;
 const goldBuyer = getAddress(GOLD_BUYER);
-const AMOUNT = BigInt(AMOUNT_USDT) * 1_000_000n;
+const AMOUNT = AMOUNT_PARSE.value;
+/** The JSON number POST /api/plans takes for AMOUNT (4.5 for 4.50 USD₮); the server converts it back exactly. */
+const AMOUNT_USDT = core.planAmountToUsdt(AMOUNT);
 /** USD₮ kept for relay fees across the run: grant, identity, revoke, three transfers (observed 0.004–0.018 each). */
 const FEE_MARGIN_USDT = 250_000n;
 /** CELO kept beyond the KeyStore registration (the SDK already adds 10% headroom, refunded). */
@@ -295,7 +298,7 @@ async function preflight() {
   const overCap = cap + AMOUNT;
   const needCelo = (passed("plan") ? 0n : reg.nextGrantValue) + CELO_MARGIN;
   const needUsdt = (passed("tick") ? 0n : AMOUNT) + (passed("probes") ? 0n : overCap) + FEE_MARGIN_USDT;
-  note("plan", `${AMOUNT_USDT} USD₮ per ${PERIOD}, cap ${fmtUsdt(cap)} per ${PERIOD}; over-cap probe ${fmtUsdt(overCap)} (must be held, is not spent)`);
+  note("plan", `${fmtUsdt(AMOUNT)} per ${PERIOD}, cap ${fmtUsdt(cap)} per ${PERIOD}; over-cap probe ${fmtUsdt(overCap)} (must be held, is not spent)`);
   note("needs", `${fmtCelo(needCelo)} and ${fmtUsdt(needUsdt)} in the wallet now`);
   note(
     "expected cost",
@@ -840,7 +843,7 @@ async function runStep(name) {
 
 async function main() {
   say(`Autumn mainnet e2e — ${DRY ? "DRY RUN (sends nothing)" : "LIVE: sends real transactions on Celo mainnet"}`);
-  say(`server ${BASE_URL}, RPC ${RPC_URL}, plan ${AMOUNT_USDT} USD₮ per ${PERIOD}, GoldBuyer ${goldBuyer}`);
+  say(`server ${BASE_URL}, RPC ${RPC_URL}, plan ${fmtUsdt(AMOUNT)} per ${PERIOD}, GoldBuyer ${goldBuyer}`);
   say(
     `env: E2E_ADMIN_KEY ${ADMIN_KEY ? "set" : "MISSING"}, E2E_CRON_SECRET ${CRON_SECRET ? "set" : "MISSING"}, E2E_RETURN_TO ${RETURN_TO ?? "MISSING"}`,
   );

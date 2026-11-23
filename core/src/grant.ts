@@ -1,7 +1,8 @@
 import { getAddress, toFunctionSelector, type Address, type Hex } from "viem";
 import type { CallPermission, SerializedSession, SessionPermissions, SpendPermission } from "@altananetwork/sdk";
-import { ALTANA_ORCHESTRATOR_BY_CHAIN, ANY_SELECTOR, CELO_CHAIN_ID, USDT } from "./constants.js";
+import { ALTANA_ORCHESTRATOR_BY_CHAIN, ANY_SELECTOR, CELO_CHAIN_ID, USDT, USDT_DECIMALS } from "./constants.js";
 import { isPlanPeriod, type PlanPeriod } from "./period.js";
+import { parseAmountText } from "./send.js";
 
 /** The two calls a plan asks the session for. */
 export const APPROVE_SIGNATURE = "approve(address,uint256)";
@@ -42,8 +43,68 @@ export const DEFAULT_FEE_ALLOWANCE_PER_BUY = 50_000n; // 0.05 USD₮
 
 /** Smallest amount per purchase: below this, 6-decimal XAUt0 rounding and fees dominate. */
 export const MIN_AMOUNT_PER_BUY = 1_000_000n; // 1 USD₮
+/** Largest amount per purchase a plan may have. */
+export const MAX_AMOUNT_PER_BUY = 100_000_000n; // 100 USD₮
+/** Plan amounts are whole cents: a multiple of 0.01 USD₮ (USD₮ has 6 decimals onchain). */
+export const AMOUNT_PER_BUY_STEP = 10_000n; // 0.01 USD₮
+/** The amounts offered as one-tap choices, in whole USD₮. Any amount the rules below allow works too. */
+export const PLAN_PRESETS_USDT = [1, 5, 10] as const;
 /** Longest session a plan may grant. */
 export const MAX_SESSION_SECS = 366 * 86_400;
+
+const USDT_BASE = 1_000_000n;
+
+/**
+ * Why a plan amount (USD₮ base units) is not allowed, worded for the owner, or null when it is: from 1 to 100 USD₮
+ * inclusive, in steps of 0.01 USD₮.
+ */
+export function planAmountProblem(amountPerBuy: bigint): string | null {
+  if (typeof amountPerBuy !== "bigint") return "Enter an amount from 1 to 100 USD₮.";
+  if (amountPerBuy < MIN_AMOUNT_PER_BUY) return "Enter at least 1 USD₮.";
+  if (amountPerBuy > MAX_AMOUNT_PER_BUY) return "Enter at most 100 USD₮.";
+  if (amountPerBuy % AMOUNT_PER_BUY_STEP !== 0n) return "Enter at most 2 decimals.";
+  return null;
+}
+
+export type PlanAmountParse = { ok: true; value: bigint } | { ok: false; problem: string };
+
+/**
+ * A plan amount typed by the owner ("4", "4.5", "4,5"), parsed with parseAmountText's rules into USD₮ base units
+ * and checked against the plan amount rules. No floating point is involved.
+ */
+export function parsePlanAmountText(input: string): PlanAmountParse {
+  const parsed = parseAmountText(input, USDT_DECIMALS);
+  if (!parsed.ok) return parsed.problem === "Enter at most 6 decimals." ? { ok: false, problem: "Enter at most 2 decimals." } : parsed;
+  const problem = planAmountProblem(parsed.value);
+  return problem ? { ok: false, problem } : { ok: true, value: parsed.value };
+}
+
+/**
+ * The `amountUsdt` JSON number of `POST /api/plans`, converted to USD₮ base units without floating-point maths.
+ * A JSON number such as 4.5 arrives as the closest double; `String()` gives back the shortest decimal that reads as
+ * that double ("4.5", "4.55"), which is the decimal that was sent for any amount of at most 2 decimals. That decimal
+ * string is then converted with integer arithmetic. Anything that does not come back as a plain decimal with at
+ * most 2 decimals inside the plan range (NaN, Infinity, exponents, negatives, strings, 0.1 + 0.2) is refused.
+ */
+export function planAmountFromUsdt(v: unknown): PlanAmountParse {
+  const bad = { ok: false as const, problem: "amountUsdt must be a number of USD₮ from 1 to 100, with at most 2 decimals" };
+  if (typeof v !== "number" || !Number.isFinite(v)) return bad;
+  const m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(String(v));
+  if (!m) return bad;
+  const value = BigInt(m[1]!) * USDT_BASE + BigInt((m[2] ?? "").padEnd(6, "0") || "0");
+  return planAmountProblem(value) ? bad : { ok: true, value };
+}
+
+/**
+ * The inverse of planAmountFromUsdt: the JSON number to send for a plan amount in base units. Throws for an amount
+ * the plan rules refuse, so a client never sends one the server would have to round.
+ */
+export function planAmountToUsdt(amountPerBuy: bigint): number {
+  const problem = planAmountProblem(amountPerBuy);
+  if (problem) throw new Error(`Not a plan amount: ${problem}`);
+  const cents = (amountPerBuy % USDT_BASE) / AMOUNT_PER_BUY_STEP;
+  return Number(`${amountPerBuy / USDT_BASE}.${cents.toString().padStart(2, "0")}`);
+}
 
 export type Plan = {
   /** USD₮ (6-decimal base units) spent on gold in each scheduled purchase. */
@@ -101,6 +162,12 @@ export function perBuyBudget(plan: Pick<Plan, "amountPerBuy" | "feeAllowancePerB
 export function validatePlan(plan: Plan, nowSecs: number): void {
   if (typeof plan.amountPerBuy !== "bigint" || plan.amountPerBuy < MIN_AMOUNT_PER_BUY) {
     throw new Error(`amountPerBuy must be at least ${MIN_AMOUNT_PER_BUY} base units (1 USD₮)`);
+  }
+  if (plan.amountPerBuy > MAX_AMOUNT_PER_BUY) {
+    throw new Error(`amountPerBuy must be at most ${MAX_AMOUNT_PER_BUY} base units (100 USD₮)`);
+  }
+  if (plan.amountPerBuy % AMOUNT_PER_BUY_STEP !== 0n) {
+    throw new Error(`amountPerBuy must be a multiple of ${AMOUNT_PER_BUY_STEP} base units (0.01 USD₮)`);
   }
   if (!isPlanPeriod(periodOf(plan))) throw new Error('period must be "day" or "week"');
   const fee = feeAllowanceOf(plan);

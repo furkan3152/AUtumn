@@ -16,7 +16,9 @@ see [docs/passkeys.md](docs/passkeys.md))
    Altana's KeyStore registration (about 20 CELO for the first plan, which
    registers two keys, and about half that for each later plan; 10% of what
    is sent is refunded). The app reads the fee from Celo.
-2. You choose 1, 5 or 10 USD₮ of gold per day or per week, for 12 weeks.
+2. You choose how much gold to buy per day or per week, for 12 weeks: 1, 5 or
+   10 USD₮, or any amount from 1 to 100 USD₮ in steps of 0.01 (for example
+   4.50 USD₮ a day).
    Confirming grants the agent a session key limited to:
    - a USD₮ cap per period (UTC day, or week from Monday 00:00 UTC) equal to
      the amount plus a 0.05 USD₮ fee allowance per purchase; relay fees come

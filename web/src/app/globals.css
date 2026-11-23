@@ -1521,6 +1521,17 @@ body:has(.landing) .main {
   padding: 0 4px;
 }
 
+/* The plan amounts: three presets and "Custom". */
+.presets__row--four {
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.plan__custom {
+  margin-top: 16px;
+  padding: 0 4px;
+}
+
 .preset {
   position: relative;
   display: grid;

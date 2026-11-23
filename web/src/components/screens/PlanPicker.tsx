@@ -4,7 +4,6 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { estimateBuyCost } from "@autumn/core";
 import {
   CheckAgainError,
-  DECIMALS,
   DIP_RULE_TEXT,
   LIMITS_TEXT,
   suggestedDeposit,
@@ -16,12 +15,11 @@ import {
   type AutumnState,
 } from "@/lib/autumn";
 import { approxUsd, bpsPercent, celo, formatDate, usdt, usdtFine } from "@/lib/format";
+import { dollarLabel, planAmountView, type AmountChoice } from "@/lib/plan";
 import { celoInUsdt } from "../Costs";
 import { Button, FailureNotice, Label, Panel, ScreenHead, Spinner, Trail } from "../ui";
 import { Icon } from "../icons";
 import { Sprite } from "../pixel";
-
-const UNIT = 10n ** BigInt(DECIMALS.USDT);
 
 export function PlanPicker({
   client,
@@ -34,24 +32,31 @@ export function PlanPicker({
   onDone: () => void;
   onBack?: () => void;
 }) {
-  const [amount, setAmount] = useState<number>(5);
+  const [choice, setChoice] = useState<AmountChoice>(5);
+  const [customText, setCustomText] = useState("");
+  const [customTouched, setCustomTouched] = useState(false);
   const [period, setPeriod] = useState<PlanPeriod>("week");
   const [dip, setDip] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const name = useId();
   const freqName = useId();
+  const customId = useId();
 
-  const each = BigInt(amount) * UNIT;
+  const amountView = planAmountView(choice, customText);
+  /** USD₮ base units per purchase, or null while "Custom" holds no valid amount (nothing can be confirmed then). */
+  const each = amountView.kind === "ok" ? amountView.amount : null;
+  const customProblem = amountView.kind === "invalid" ? amountView.problem : null;
   const daily = period === "day";
   const per = daily ? "day" : "week";
-  const limits = useMemo(() => draftLimits({ amount: each, period, buyTheDip: dip }, new Date()), [each, period, dip]);
+  // The expiry does not depend on the amount; the cap uses 0 only while no amount is valid, and is not shown then.
+  const limits = useMemo(() => draftLimits({ amount: each ?? 0n, period, buyTheDip: dip }, new Date()), [each, period, dip]);
   const balance = state.balances?.usdt ?? 0n;
-  const buysCovered = each > 0n ? Number(balance / each) : 0;
+  const buysCovered = each ? Number(balance / each) : 0;
   const feeDue = state.registration && state.registration.nextGrantFeeCelo > 0n ? state.registration : null;
   const fees = state.fees;
-  const cost = fees ? estimateBuyCost(each, fees.relayFeeEstimate) : null;
-  const fullPlan = suggestedDeposit(each, period);
+  const cost = fees && each ? estimateBuyCost(each, fees.relayFeeEstimate) : null;
+  const fullPlan = each ? suggestedDeposit(each, period) : null;
 
   const waiting = error instanceof CheckAgainError;
   const [note, setNote] = useState<string | null>(null);
@@ -65,7 +70,7 @@ export function PlanPicker({
   }, [state.agent.kind, state.plan, onDone]);
 
   const confirm = async () => {
-    if (busy) return;
+    if (busy || each === null) return;
     setBusy(true);
     setError(null);
     setNote(null);
@@ -127,16 +132,44 @@ export function PlanPicker({
           <legend className="legend">
             <Icon name="coin" /> Gold to buy every {per}
           </legend>
-          <div className="presets__row">
+          <div className="presets__row presets__row--four">
             {PLAN_PRESETS_USDT.map((p, i) => (
-              <label key={p} className={`preset ${amount === p ? "is-on" : ""}`}>
-                <input type="radio" name={name} value={p} checked={amount === p} onChange={() => setAmount(p)} />
+              <label key={p} className={`preset ${choice === p ? "is-on" : ""}`}>
+                <input type="radio" name={name} value={p} checked={choice === p} onChange={() => setChoice(p)} />
                 <CoinPile size={i + 1} />
                 <span className="preset__amount">${p}</span>
                 <span className="preset__unit">per {per}</span>
               </label>
             ))}
+            <label className={`preset ${choice === "custom" ? "is-on" : ""}`}>
+              <input type="radio" name={name} value="custom" checked={choice === "custom"} onChange={() => setChoice("custom")} />
+              <Icon name="coin" className="preset__icon" />
+              <span className="preset__amount preset__amount--small">Custom</span>
+              <span className="preset__unit">per {per}</span>
+            </label>
           </div>
+          {choice === "custom" && (
+            <div className="field plan__custom">
+              <label htmlFor={customId}>USD₮ per {per}, from 1 to 100</label>
+              <input
+                id={customId}
+                className="input num"
+                inputMode="decimal"
+                autoComplete="off"
+                placeholder="4.00"
+                value={customText}
+                onChange={(e) => setCustomText(e.target.value)}
+                onBlur={() => setCustomTouched(true)}
+                aria-invalid={customTouched && amountView.kind !== "ok"}
+                aria-describedby={customTouched && customProblem ? `${customId}-problem` : undefined}
+              />
+              {customTouched && (customProblem || amountView.kind === "empty") && (
+                <p className="error-text" role="alert" id={`${customId}-problem`}>
+                  {customProblem ?? "Enter an amount."}
+                </p>
+              )}
+            </div>
+          )}
         </fieldset>
 
         <label className="toggle">
@@ -159,7 +192,7 @@ export function PlanPicker({
               <Label icon="pouch">{daily ? "Daily" : "Weekly"} limit</Label>
             </dt>
             <dd>
-              <span className="num num--key">{usdt(limits.cap)} USD₮</span> per {per}, including{" "}
+              <span className="num num--key">{each ? `${usdt(limits.cap)} USD₮` : "–"}</span> per {per}, including{" "}
               <span className="num">{usdt(limits.feeAllowance)}</span> USD₮ for network fees. Resets{" "}
               {daily ? (
                 <>
@@ -207,7 +240,7 @@ export function PlanPicker({
               {cost ? (
                 <>
                   About <span className="num">{usdtFine(cost.total)}</span> USD₮ on top of the gold (
-                  <span className="num">{bpsPercent(cost.totalBps)}</span> of <span className="num">${amount}</span>): the pool&apos;s{" "}
+                  <span className="num">{bpsPercent(cost.totalBps)}</span> of <span className="num">{dollarLabel(each!)}</span>): the pool&apos;s{" "}
                   <span className="num">0.3%</span> fee (<span className="num">{usdtFine(cost.poolFee)}</span>) and an estimated relay fee of{" "}
                   <span className="num">{usdtFine(cost.relayFee)}</span> USD₮ at today&apos;s gas price. The agent refuses a relay fee above{" "}
                   <span className="num">{usdt(limits.feeAllowance / (dip ? 2n : 1n))}</span> USD₮.
@@ -241,14 +274,16 @@ export function PlanPicker({
               <Label icon="calendar">Full plan</Label>
             </dt>
             <dd>
-              <span className="num">{usdt(fullPlan)}</span> USD₮ covers all <span className="num">{daily ? PLAN_DURATION_WEEKS * 7 : PLAN_DURATION_WEEKS}</span> buys
+              <span className="num">{fullPlan !== null ? usdt(fullPlan) : "–"}</span> USD₮ covers all <span className="num">{daily ? PLAN_DURATION_WEEKS * 7 : PLAN_DURATION_WEEKS}</span> buys
               {dip ? " (dip buys come on top)" : ""}.
             </dd>
           </div>
         </dl>
         <p className="muted small">
           Your <span className="num">{usdt(balance)}</span> USD₮{" "}
-          {buysCovered >= 1 ? (
+          {each === null ? (
+            "is in the wallet."
+          ) : buysCovered >= 1 ? (
             <>
               covers about <span className="num">{buysCovered}</span> {daily ? "daily" : "weekly"} buys.
             </>
@@ -262,14 +297,14 @@ export function PlanPicker({
       </div>
 
       <div className="plan__act">
-      <Button block onClick={confirm} disabled={busy || waiting}>
+      <Button block onClick={confirm} disabled={busy || waiting || each === null}>
         {busy && !waiting ? (
           <>
             <Spinner /> Confirm with your passkey…
           </>
         ) : (
           <>
-            Confirm: <span className="num">{usdt(each)} USD₮</span> of gold a {per}
+            Confirm: <span className="num">{each !== null ? `${usdt(each)} USD₮` : "–"}</span> of gold a {per}
           </>
         )}
       </Button>

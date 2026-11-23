@@ -5,9 +5,13 @@ is trusted with.
 
 ## Plans and the schedule
 
-- A plan buys 1, 5 or 10 USD₮ of gold per day or per week, for 12 weeks
-  (`agent/src/service.ts`, `core/src/period.ts`). The session key expires at
-  the end of the plan.
+- A plan buys a fixed amount of gold per day or per week, for 12 weeks
+  (`agent/src/service.ts`, `core/src/period.ts`): one of the presets 1, 5
+  or 10 USD₮, or any amount from 1 to 100 USD₮ in steps of 0.01
+  (`planAmountProblem`, `core/src/grant.ts`). The API takes it as a JSON
+  number (`amountUsdt: 4.5`); the server turns it into USD₮ base units from
+  its decimal string, with integer maths, and refuses anything else with a
+  400. The session key expires at the end of the plan.
 - Periods are counted as the Altana account counts them: a day resets at
   00:00 UTC, a week on Monday 00:00 UTC (`core/src/week.ts`).
 - The first purchase is due when the plan is created, so it happens at the

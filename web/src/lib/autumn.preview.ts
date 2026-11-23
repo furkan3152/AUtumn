@@ -33,6 +33,7 @@ import {
   maxSendable,
   routeFeeText,
   swapBalanceOf,
+  planAmountProblem,
   swapPriceCheck,
   swapRoute,
   usdtToCelo,
@@ -430,6 +431,9 @@ export function createPreviewClient(): AutumnClient {
     },
     async confirmPlan(input) {
       await wait(1500);
+      // The server's amount rule (1 to 100 USD₮, steps of 0.01), so the preview refuses what the server would.
+      const amountProblem = planAmountProblem(input.amount);
+      if (amountProblem) throw new Error(`${amountProblem} Nothing was signed.`);
       const now = new Date();
       const plan = makePlan(input, now, new Date(now.getTime() + 5000));
       const regTx = fakeHash();

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
 import { getAddress, type Address } from "viem";
 import { AltanaError } from "@altananetwork/sdk";
-import { planToSessionGrant, weekStart } from "@autumn/core";
+import { decodeBuyCalls, planToSessionGrant, weekStart } from "@autumn/core";
 import { createPlan } from "../src/plans.js";
 import { createRunner } from "../src/runner.js";
 import { MemoryStorage } from "../src/storage/memory.js";
@@ -13,7 +13,7 @@ const WALLET = getAddress("0x2222222222222222222222222222222222222222") as Addre
 const WED_NOON = Math.floor(Date.parse("2026-11-18T12:00:00Z") / 1000);
 const AMOUNT = 5_000_000n;
 
-async function setup(opts: { dipBuy?: boolean; dayOfWeek?: number; hourUtc?: number; now?: number; period?: "day" | "week" } = {}) {
+async function setup(opts: { dipBuy?: boolean; dayOfWeek?: number; hourUtc?: number; now?: number; period?: "day" | "week"; amount?: bigint } = {}) {
   const now = opts.now ?? WED_NOON;
   const storage = new MemoryStorage();
   const chain = new FakeChain(now);
@@ -21,7 +21,7 @@ async function setup(opts: { dipBuy?: boolean; dayOfWeek?: number; hourUtc?: num
   const encryptionKey = randomBytes(32);
   const { plan, sessionPublicKey, grant } = await createPlan(
     { storage, encryptionKey, goldBuyer: GOLD_BUYER, now },
-    { walletAddress: WALLET, amountPerBuy: AMOUNT, period: opts.period ?? "week", expiresAt: now + 60 * 86_400, dayOfWeek: opts.dayOfWeek ?? 1, hourUtc: opts.hourUtc ?? 9, dipBuy: !!opts.dipBuy },
+    { walletAddress: WALLET, amountPerBuy: opts.amount ?? AMOUNT, period: opts.period ?? "week", expiresAt: now + 60 * 86_400, dayOfWeek: opts.dayOfWeek ?? 1, hourUtc: opts.hourUtc ?? 9, dipBuy: !!opts.dipBuy },
   );
   chain.cap = grant.periodCap;
   chain.period = grant.period;
@@ -75,6 +75,16 @@ describe("runner", () => {
     chain.spent = 0n; // the fake does not reset the daily counter by itself
     expect(await only(runner)).toMatchObject({ decision: "bought" });
     expect(executor.calls).toHaveLength(3);
+  });
+
+  it("buys a custom 4.50 USD₮ plan for exactly 4.50 USD₮, with minOut from the quote of that amount, inside its cap", async () => {
+    const { runner, executor, chain, grant } = await setup({ amount: 4_500_000n, period: "day" });
+    expect(grant.periodCap).toBe(4_550_000n);
+    const r = await only(runner);
+    expect(r).toMatchObject({ decision: "bought", amountIn: 4_500_000n });
+    const quote = await chain.quote(4_500_000n);
+    expect(decodeBuyCalls(executor.calls[0]!.calls, GOLD_BUYER)).toMatchObject({ amountIn: 4_500_000n, minOut: quote.minOut });
+    expect(quote.minOut).toBe((1_260n * 9950n) / 10_000n);
   });
 
   it("buys once when due, with the decrypted session key and the exact two calls", async () => {
