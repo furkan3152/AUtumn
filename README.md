@@ -6,7 +6,9 @@ that only your passkey controls. The agent works from a session key whose
 limits are stored onchain: a USD₮ cap per period, a short allowlist of calls
 and an expiry. Anyone can read them, and only your passkey can add or revoke a
 key. Built for the Celo "Agents Open for Business" hackathon, Altana Agent
-Wallets track. Live app: https://autumn-gold.onrender.com
+Wallets track. Live app: https://autumngold.app (wallets made before
+23 Nov 2026 open at https://autumn-gold.onrender.com, the same deployment;
+see [docs/passkeys.md](docs/passkeys.md))
 
 ## How it works
 

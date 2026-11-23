@@ -2,7 +2,7 @@
 
 ## Node server on any host (what the live deployment runs)
 
-The live deployment at https://autumn-gold.onrender.com runs the Next.js app
+The live deployment at https://autumngold.app (also reachable at https://autumn-gold.onrender.com, where earlier wallets open) runs the Next.js app
 as one long-lived Node server on Render, with the purchase tick run
 in-process. Any host that runs Node 22 works the same way.
 
@@ -26,7 +26,7 @@ Environment variables (names as in `web/.env.example`, which explains each):
 |---|---|
 | `NEXT_PUBLIC_AUTUMN_GOLD_BUYER_ADDRESS`, `NEXT_PUBLIC_AUTUMN_GOLD_BUYER_DEPLOY_BLOCK` | GoldBuyer and its deploy block ([README, "Deployed on Celo mainnet"](../README.md#deployed-on-celo-mainnet)) |
 | `NEXT_PUBLIC_AUTUMN_RP_ID` | The passkey rpId: the domain the app is served on. Passkeys made for one rpId do not work on another, so choose it before users create passkeys. Optional when `NEXT_PUBLIC_AUTUMN_RP_IDS` is set |
-| `NEXT_PUBLIC_AUTUMN_RP_IDS` | Optional: every domain this deployment serves as a passkey domain, comma-separated, primary first (for example `autumngold.example,autumn-gold.onrender.com`). Each page uses its own host's entry as the rpId; see [Adding a custom domain](#adding-a-custom-domain) |
+| `NEXT_PUBLIC_AUTUMN_RP_IDS` | Optional: every domain this deployment serves as a passkey domain, comma-separated, primary first (for example `autumngold.app,autumn-gold.onrender.com`). Each page uses its own host's entry as the rpId; see [Adding a custom domain](#adding-a-custom-domain) |
 | `NEXT_PUBLIC_AUTUMN_APP_ORIGIN` | Optional: the exact origin passkeys may be used from (with `NEXT_PUBLIC_AUTUMN_RP_IDS`: only for the listed host it names; the others use `https://<host>`) |
 | `NEXT_PUBLIC_AUTUMN_CELO_RPC_URL`, `NEXT_PUBLIC_AUTUMN_LOGS_BLOCK_RANGE` | Optional browser RPC and `eth_getLogs` block limit |
 | `DATABASE_URL` | Postgres connection string |
@@ -68,7 +68,7 @@ custom domain open only there ([docs/passkeys.md](passkeys.md#which-domain-a-pas
    (do not turn off the service's `onrender.com` subdomain if Render
    offers it): that would lock out every wallet made there.
 2. Set, for example,
-   `NEXT_PUBLIC_AUTUMN_RP_IDS=autumngold.example,autumn-gold.onrender.com`.
+   `NEXT_PUBLIC_AUTUMN_RP_IDS=autumngold.app,autumn-gold.onrender.com`.
    Leave `NEXT_PUBLIC_AUTUMN_RP_ID=autumn-gold.onrender.com` and
    `NEXT_PUBLIC_AUTUMN_APP_ORIGIN=https://autumn-gold.onrender.com` as they
    are; with the list they apply only to that host (and to hosts not in the

@@ -76,7 +76,7 @@ the app also refuses to use passkeys on any other host
 
 One deployment can serve several domains ("two doors, one app"):
 `NEXT_PUBLIC_AUTUMN_RP_IDS` lists them, primary first, for example
-`autumngold.example,autumn-gold.onrender.com`. In the browser the app takes
+`autumngold.app,autumn-gold.onrender.com`. In the browser the app takes
 the entry equal to the page's hostname as its rpId (`passkeyDomainFor`), and
 every passkey step uses it: creating a wallet, "I already have an Autumn
 passkey", restoring from a backup code, and the backup code itself. Signing
