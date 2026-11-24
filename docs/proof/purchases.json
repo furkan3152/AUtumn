@@ -1,11 +1,11 @@
 {
-  "generatedAt": "2026-11-23T22:39:29.889Z",
+  "generatedAt": "2026-11-24T06:22:28.030Z",
   "chainId": 42220,
   "rpc": "https://forno.celo.org",
   "goldBuyer": "0xB279c4380557b319C42ef3B023Ac8C8b2d64B6A0",
   "fromBlock": "83395551",
-  "toBlock": "83572791",
-  "toBlockTime": "2026-11-23T22:39:09.000Z",
+  "toBlock": "83600568",
+  "toBlockTime": "2026-11-24T06:22:06.000Z",
   "teamWallets": {
     "0x53180bbC54Bc9561c08805ca4832be85345fF535": "team deployer/test",
     "0x15855ae2E04Fd00eFA45cB70D2C29E5777925429": "team owner test",
@@ -21,22 +21,22 @@
     "0x0B479179781640C1C62FE845dCAab1689CB4985C"
   ],
   "totals": {
-    "purchases": 9,
+    "purchases": 10,
     "teamPurchases": 6,
-    "nonTeamPurchases": 3,
+    "nonTeamPurchases": 4,
     "uniqueBuyers": 8,
     "uniqueNonTeamBuyers": 2,
     "repeatNonTeamBuyers": 1,
     "nonTeamAltanaBuyers": 2,
-    "nonTeamPurchasesWithAutumnSession": 3,
-    "volumeUsdtIn": "21",
-    "volumeXaut0Out": "0.00583",
-    "nonTeamVolumeUsdtIn": "15",
-    "nonTeamVolumeXaut0Out": "0.004148",
-    "purchasesCreditedByVerifyTx": 6,
-    "purchasesSentByAgentWallet": 6,
+    "nonTeamPurchasesWithAutumnSession": 4,
+    "volumeUsdtIn": "23",
+    "volumeXaut0Out": "0.006379",
+    "nonTeamVolumeUsdtIn": "17",
+    "nonTeamVolumeXaut0Out": "0.004697",
+    "purchasesCreditedByVerifyTx": 7,
+    "purchasesSentByAgentWallet": 7,
     "purchasesSentByAltanaRelay": 2,
-    "purchasesWithTagInInnerCalls": 8
+    "purchasesWithTagInInnerCalls": 9
   },
   "purchases": [
     {
@@ -347,7 +347,7 @@
             "limit": "5050000"
           }
         ],
-        "statusNow": "active"
+        "statusNow": "revoked (not on the account)"
       },
       "relayFee": {
         "token": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
@@ -451,12 +451,64 @@
             "limit": "5050000"
           }
         ],
-        "statusNow": "active"
+        "statusNow": "revoked (not on the account)"
       },
       "relayFee": {
         "token": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
         "amount": "17031",
         "maxAmount": "17031",
+        "recipient": "0xaF089b4ECA94A4B2f51D8F5668cFf244f2c6C4bC"
+      },
+      "attribution": {
+        "tag": "celo_c24c5a65e5a3",
+        "outerCalldataEndsWithTag": true,
+        "tagOccurrencesInCalldata": 3,
+        "innerCalls": 2,
+        "innerCallsTagged": 2,
+        "verifyTx": {
+          "codes": [
+            "celo_c24c5a65e5a3"
+          ],
+          "schemaId": 0
+        },
+        "verifyTxCreditsUs": true
+      }
+    },
+    {
+      "block": "83599553",
+      "time": "2026-11-24T06:05:11.000Z",
+      "txHash": "0x9504df2b6444b41a90ed478671d9dc7b6f1a9c25ea61728d99c2fb9b9fed999f",
+      "celoscan": "https://celoscan.io/tx/0x9504df2b6444b41a90ed478671d9dc7b6f1a9c25ea61728d99c2fb9b9fed999f",
+      "buyer": "0x65B6Be7f24aB649267A4F2e5Ac4fBf1b16B31140",
+      "team": null,
+      "usdtIn": "2000000",
+      "xaut0Out": "549",
+      "usdtIn_display": "2",
+      "xaut0Out_display": "0.000549",
+      "txFrom": "0x0b5B7ec235F2291396c63F4afc96599B4F70a9Dd",
+      "sentBy": "Autumn agent wallet",
+      "txTo": "0xAF140d0416A994Aebb3fA6212B16CE6700f09751",
+      "route": "Altana Orchestrator intent",
+      "buyerKind": "Altana wallet",
+      "buyerActiveAutumnSessions": 1,
+      "signingKey": {
+        "keyHash": "0x329ff24a0fc83658307953d7913bac5a5ed98edde66c9c3def5be8814867d171",
+        "superAdmin": false,
+        "autumnAllowlist": true,
+        "allowlistReadFrom": "purchase block",
+        "spend": [
+          {
+            "token": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+            "period": 2,
+            "limit": "4100000"
+          }
+        ],
+        "statusNow": "active"
+      },
+      "relayFee": {
+        "token": "0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e",
+        "amount": "18486",
+        "maxAmount": "18486",
         "recipient": "0xaF089b4ECA94A4B2f51D8F5668cFf244f2c6C4bC"
       },
       "attribution": {
