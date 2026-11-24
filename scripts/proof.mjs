@@ -21,8 +21,15 @@
  * - team wallets, from the list below. The agent wallet sends purchases and
  *   is never counted as a buyer.
  *
+ * It also lists every conversion made in the app's Convert screen by a buyer
+ * or team wallet: a Uniswap V3 swap on the CELO/USD₮ or USD₮/XAUt0 pool that
+ * pays out to that wallet, in a transaction sent to Altana's Orchestrator,
+ * with its USD₮ leg as the value. A buyer who converts in another app through
+ * those pools to their own wallet would be counted too; the Orchestrator check
+ * only rules out direct swaps.
+ *
  * Totals (unique non-team buyers, purchases, repeat buyers, volume, senders,
- * purchases credited by verifyTx) are
+ * purchases credited by verifyTx, conversions) are
  * printed and written with every row to docs/proof/purchases.{json,csv},
  * and summarised for people in docs/usage.md (with --out: <dir>/usage.md).
  * Sends nothing and needs no key. Env: PROOF_RPC_URL (default forno),
@@ -188,6 +195,71 @@ async function sessionFacts(wallet, keyHash, purchaseBlock, head, nowTs) {
   };
 }
 
+const swapEvent = viem.parseAbiItem(
+  "event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)",
+);
+// token0/token1 of each pool (CELO/USD₮: CELO, USD₮; USD₮/XAUt0: USD₮, XAUt0).
+const POOLS = new Map([
+  [getAddress(core.CELO_USDT_POOL), ["CELO", "USD₮"]],
+  [getAddress(core.USDT_XAUT0_POOL), ["USD₮", "XAUt0"]],
+]);
+const DECIMALS = { CELO: 18, "USD₮": 6, XAUt0: 6 };
+
+/**
+ * Conversions paid out to `wallets` from `fromBlock`: one row per transaction,
+ * from the asset that went into the first pool to the asset that came out of
+ * the last, valued at the USD₮ that changed hands.
+ */
+async function scanConversions(wallets, fromBlock, toBlock, purchaseTxs) {
+  const byTx = new Map();
+  for (const pool of POOLS.keys()) {
+    const logs = await scanLogs(client, { address: pool, event: swapEvent, args: { recipient: [...wallets.keys()] }, fromBlock, toBlock });
+    for (const l of logs) if (!purchaseTxs.has(l.transactionHash)) byTx.set(l.transactionHash, l.blockNumber);
+  }
+  const rows = [];
+  for (const [hash, blockNumber] of [...byTx].sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))) {
+    // Both pools' swaps in this transaction, read from its block's logs.
+    const [tx, block, blockSwaps] = await Promise.all([
+      retry(() => client.getTransaction({ hash }), { label: `tx ${hash}` }),
+      retry(() => client.getBlock({ blockNumber }), { label: `block ${blockNumber}` }),
+      retry(() => client.getLogs({ address: [...POOLS.keys()], event: swapEvent, fromBlock: blockNumber, toBlock: blockNumber, strict: true }), {
+        label: `swaps in block ${blockNumber}`,
+      }),
+    ]);
+    if (!tx.to || getAddress(tx.to) !== getAddress(core.ALTANA_ORCHESTRATOR)) continue;
+    const swaps = blockSwaps
+      .filter((l) => l.transactionHash === hash)
+      .sort((a, b) => a.logIndex - b.logIndex)
+      .map((l) => ({ pool: getAddress(l.address), ...l.args }));
+    const last = swaps.at(-1);
+    const wallet = getAddress(last.recipient);
+    if (!wallets.has(wallet)) continue;
+    // Positive amounts go into the pool, negative ones come out of it.
+    const leg = (swap) => {
+      const [t0, t1] = POOLS.get(swap.pool);
+      return swap.amount0 > 0n ? { in: [t0, swap.amount0], out: [t1, -swap.amount1] } : { in: [t1, swap.amount1], out: [t0, -swap.amount0] };
+    };
+    const first = leg(swaps[0]);
+    const final = leg(last);
+    const usdt = swaps.map(leg).flatMap((x) => [x.in, x.out]).find(([asset]) => asset === "USD₮")[1];
+    rows.push({
+      block: blockNumber,
+      time: new Date(Number(block.timestamp) * 1000).toISOString(),
+      txHash: hash,
+      celoscan: celoscanTx(hash),
+      wallet,
+      team: team.get(wallet) ?? null,
+      from: first.in[0],
+      amountIn: fmtUnits(first.in[1], DECIMALS[first.in[0]]),
+      to: final.out[0],
+      amountOut: fmtUnits(final.out[1], DECIMALS[final.out[0]]),
+      usdtValue: usdt,
+      usdtValue_display: fmtUnits(usdt, 6),
+    });
+  }
+  return rows;
+}
+
 async function main() {
   const head = await retry(() => core.pinnedBlock(client), { label: "head" });
   const headBlock = await retry(() => client.getBlock({ blockNumber: head }));
@@ -256,6 +328,12 @@ async function main() {
     });
   }
 
+  log("Reading conversions…");
+  const wallets = new Map(team);
+  wallets.delete(agentWallet);
+  for (const r of rows) if (!r.team) wallets.set(r.buyer, null);
+  const conversions = await scanConversions(wallets, deployBlock, head, new Set(rows.map((r) => r.txHash)));
+
   const nonTeam = rows.filter((r) => !r.team);
   const count = (list) => {
     const m = new Map();
@@ -281,6 +359,10 @@ async function main() {
     purchasesSentByAgentWallet: rows.filter((r) => r.txFrom === agentWallet).length,
     purchasesSentByAltanaRelay: rows.filter((r) => relaySenders.has(r.txFrom)).length,
     purchasesWithTagInInnerCalls: rows.filter((r) => (r.attribution.innerCallsTagged ?? 0) > 0).length,
+    conversions: conversions.length,
+    nonTeamConversions: conversions.filter((c) => !c.team).length,
+    conversionVolumeUsdt: fmtUnits(sum(conversions, "usdtValue"), 6),
+    nonTeamConversionVolumeUsdt: fmtUnits(sum(conversions.filter((c) => !c.team), "usdtValue"), 6),
   };
   const report = {
     generatedAt: new Date().toISOString(),
@@ -295,6 +377,7 @@ async function main() {
     altanaRelaySenders: [...relaySenders],
     totals,
     purchases: rows,
+    conversions,
   };
 
   mkdirSync(outDir, { recursive: true });
@@ -371,6 +454,8 @@ function usageMarkdown(report) {
     `| Purchases credited to our attribution tag by Celo's \`verifyTx\` | ${totals.purchasesCreditedByVerifyTx} of ${totals.purchases} |`,
     `| Purchases sent by Autumn's agent wallet | ${totals.purchasesSentByAgentWallet} of ${totals.purchases} |`,
     `| Purchases sent by Altana's relay | ${totals.purchasesSentByAltanaRelay} of ${totals.purchases} |`,
+    `| Conversions by independent buyers (Convert screen) | ${totals.nonTeamConversions}, worth ${totals.nonTeamConversionVolumeUsdt} USD₮ |`,
+    `| Team test conversions (not counted as users) | ${totals.conversions - totals.nonTeamConversions}, worth ${fmtUnits(report.conversions.filter((c) => c.team).reduce((a, c) => a + c.usdtValue, 0n), 6)} USD₮ |`,
     "",
   ];
   if (totals.uniqueNonTeamBuyers === 0) {
@@ -405,6 +490,23 @@ function usageMarkdown(report) {
       const credited = r.attribution.verifyTxCreditsUs ? "yes" : r.attribution.verifyTx === null ? "no (null)" : "no";
       lines.push(
         `| ${utc(r.time)} | ${addrLink(r.buyer)} | ${r.usdtIn_display} | ${r.xaut0Out_display} | ${r.route} | ${sentBy} | ${key} | ${credited} | ${r.team ?? "no"} | [${shortHash(r.txHash)}](${r.celoscan}) |`,
+      );
+    }
+  }
+  lines.push(
+    "",
+    "## Conversions",
+    "",
+    "Swaps made in the Convert screen by the wallets above: a swap on the CELO/USD₮ or USD₮/XAUt0 pool that pays out to the wallet, in a transaction sent to Altana's Orchestrator. The value is the USD₮ that changed hands; a conversion between CELO and gold passes through USD₮ and counts once.",
+    "",
+  );
+  if (report.conversions.length === 0) {
+    lines.push("None.");
+  } else {
+    lines.push("| Time (UTC) | Wallet | From | To | USD₮ value | Team | Transaction |", "|---|---|---|---|---|---|---|");
+    for (const c of report.conversions) {
+      lines.push(
+        `| ${utc(c.time)} | ${addrLink(c.wallet)} | ${c.amountIn} ${c.from} | ${c.amountOut} ${c.to} | ${c.usdtValue_display} | ${c.team ?? "no"} | [${shortHash(c.txHash)}](${c.celoscan}) |`,
       );
     }
   }
