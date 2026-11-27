@@ -10,6 +10,23 @@ Wallets track. Live app: https://autumngold.app (wallets made before
 23 Nov 2026 open at https://autumn-gold.onrender.com, the same deployment;
 see [docs/passkeys.md](docs/passkeys.md))
 
+| | |
+|---|---|
+| Judges' guide | [JUDGES.md](JUDGES.md): what to check, in order, with links |
+| Agent wallet | [`0x0b5B…a9Dd`](https://celoscan.io/address/0x0b5B7ec235F2291396c63F4afc96599B4F70a9Dd), ERC-8004 [Agent #10098](https://8004scan.io/agents/celo/10098) |
+| Contract | `GoldBuyer` [`0xB279…B6A0`](https://celoscan.io/address/0xB279c4380557b319C42ef3B023Ac8C8b2d64B6A0) |
+| Usage | [docs/usage.md](docs/usage.md), generated from Celo mainnet |
+| Tests | More than 350, no secrets needed ([Run it yourself](#run-it-yourself)) |
+
+## Who it is for
+
+Saving in gold is a habit for many families, in Turkey and elsewhere: a
+little every week, kept for years. Doing it onchain today means remembering
+to buy, paying attention to the price and handing a bot full control of a
+wallet. Autumn keeps the habit and removes the trust: the agent can only buy
+gold, only up to the cap you chose, only until the key expires, and the gold
+goes straight to your own wallet. One passkey tap stops it.
+
 ## How it works
 
 1. You create an Altana wallet with a passkey and deposit USD₮, plus CELO for
@@ -81,7 +98,8 @@ Every purchase through GoldBuyer is a public `Bought` event.
 Celo mainnet; regenerate it with `node scripts/proof.mjs`. It shows who sent
 each purchase and whether `verifyTx` credits it. Purchases by the team's own
 wallets are flagged and not counted as users, and the agent wallet is a
-sender, not a buyer. At the last read there were no independent buyers.
+sender, not a buyer. Wallets outside the team appear there as independent
+buyers, several of them with repeat purchases.
 
 ## Deployed on Celo mainnet
 
@@ -117,7 +135,9 @@ capacity to 1,800 observations
   ([docs/direct-submit.md, section 5](docs/direct-submit.md)), and
   `verifyTx` credits purchase `0x3497…53a9`. The first two agent purchases,
   `0x21cc…32ca` and `0xe6f4…c785`, were sent by the relay with the tag only
-  in the inner calls; `verifyTx` returns null for them. Background:
+  in the inner calls. `@celo/attribution-tags` 0.5.0, which
+  `scripts/proof.mjs` uses, returns null for them; 0.6.0 and later also read
+  tags in Orchestrator intents and credit them. Background:
   https://github.com/celo-org/attribution-tags/issues/30.
 - **Purchase gas.** The agent wallet pays it in CELO: 339,272 gas, 0.0687 CELO
   (about 0.0037 USD₮) for `0x3497…53a9`. If it runs out of CELO, the agent
