@@ -148,7 +148,7 @@ capacity to 1,800 observations
 | Path | Contents |
 |---|---|
 | `web/` | The app (Next.js), its API routes and the in-process scheduler |
-| `contracts/` | `GoldBuyer` and its mainnet-fork tests (Foundry) |
+| `contracts/` | `GoldBuyer`, offline unit tests and mainnet-fork tests (Foundry) |
 | `core/` | Chain constants, the grant a plan asks for, calldata, quotes and chain readers |
 | `agent/` | The purchase runner, plan service, Postgres storage and CLI |
 | `scripts/` | `proof.mjs` (read-only usage report) and `e2e-mainnet.mjs` (funded end-to-end run) |
@@ -191,6 +191,7 @@ Tests:
 cd core && npm test && npm run test:integration   # the second reads Celo mainnet
 cd ../agent && npm test                            # add TEST_DATABASE_URL for the Postgres tests
 cd ../web && npm test && npm run typecheck
+cd ../contracts && forge test                     # fork tests need a Celo RPC; offline they are skipped and the unit tests still run
 ```
 
 ## Docs
